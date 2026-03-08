@@ -3,12 +3,16 @@ package installcmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 )
+
+// cmdLookPath is a package-level var for testability.
+var cmdLookPath = exec.LookPath
 
 // CommandSequence represents an ordered list of commands to run in sequence.
 // Each inner slice is a single command with its arguments (e.g., ["brew", "install", "engram"]).
@@ -126,10 +130,13 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 		}, nil
 	case "winget":
 		// On Windows, use Git Bash (bundled with Git for Windows) to run the install script.
+		// We must resolve Git Bash explicitly because bare "bash" may resolve to
+		// C:\Windows\System32\bash.exe (WSL), which cannot run the script.
 		cloneDst := filepath.Join(os.TempDir(), "gentleman-guardian-angel")
+		bash := gitBashPath()
 		return CommandSequence{
 			{"git", "clone", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", cloneDst},
-			{"bash", bashScriptPath(profile, filepath.Join(cloneDst, "install.sh"))},
+			{bash, bashScriptPath(profile, filepath.Join(cloneDst, "install.sh"))},
 		}, nil
 	default:
 		return nil, fmt.Errorf(
@@ -144,6 +151,50 @@ func bashScriptPath(profile system.PlatformProfile, path string) string {
 		return strings.ReplaceAll(path, `\`, "/")
 	}
 	return path
+}
+
+// gitBashPath returns the path to Git Bash on Windows.
+// It resolves git on PATH, then finds bash.exe relative to it
+// (Git for Windows always installs both in the same bin/ directory).
+// Falls back to well-known locations, then to bare "bash" as last resort.
+func gitBashPath() string {
+	// Strategy 1: find git on PATH and derive bash.exe from it.
+	if gitPath, err := cmdLookPath("git"); err == nil {
+		// gitPath is e.g. "C:\Program Files\Git\cmd\git.exe"
+		// bash.exe lives in the sibling bin/ directory.
+		gitDir := filepath.Dir(gitPath) // .../cmd or .../bin
+		parent := filepath.Dir(gitDir)  // .../Git
+
+		candidate := filepath.Join(parent, "bin", "bash.exe")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+
+		// git might already be in bin/ (not cmd/).
+		candidate = filepath.Join(gitDir, "bash.exe")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+
+	// Strategy 2: well-known locations.
+	candidates := []string{
+		filepath.Join(os.Getenv("ProgramFiles"), "Git", "bin", "bash.exe"),
+		filepath.Join(os.Getenv("ProgramFiles(x86)"), "Git", "bin", "bash.exe"),
+		`C:\Program Files\Git\bin\bash.exe`,
+	}
+
+	for _, c := range candidates {
+		if c == "" {
+			continue
+		}
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
+	}
+
+	// Last resort — bare "bash" and hope it's Git Bash, not WSL.
+	return "bash"
 }
 
 // resolveEngramInstall returns the correct install command sequence for Engram per platform.
