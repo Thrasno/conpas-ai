@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/Thrasno/conpas-ai/internal/system"
 )
 
 // --- TestDetectInstalledVersion ---
@@ -25,13 +25,13 @@ func TestDetectInstalledVersion(t *testing.T) {
 	}{
 		{
 			name:         "gentle-ai uses build var",
-			tool:         ToolInfo{Name: "gentle-ai", DetectCmd: nil},
+			tool:         ToolInfo{Name: "conpas-ai", DetectCmd: nil},
 			currentBuild: "1.5.0",
 			wantVersion:  "1.5.0",
 		},
 		{
 			name:         "gentle-ai dev build",
-			tool:         ToolInfo{Name: "gentle-ai", DetectCmd: nil},
+			tool:         ToolInfo{Name: "conpas-ai", DetectCmd: nil},
 			currentBuild: "dev",
 			wantVersion:  "dev",
 		},
@@ -245,8 +245,8 @@ func TestFetchLatestRelease_GithubToken(t *testing.T) {
 		t.Fatalf("Authorization = %q, want %q", gotAuth, "Bearer test-token-123")
 	}
 
-	if gotUserAgent != "gentle-ai-update-check" {
-		t.Fatalf("User-Agent = %q, want %q", gotUserAgent, "gentle-ai-update-check")
+	if gotUserAgent != "conpas-ai-update-check" {
+		t.Fatalf("User-Agent = %q, want %q", gotUserAgent, "conpas-ai-update-check")
 	}
 }
 
@@ -282,8 +282,8 @@ func TestCheckAll(t *testing.T) {
 		path := r.URL.Path
 		var release githubRelease
 		switch {
-		case contains(path, "gentle-ai"):
-			release = githubRelease{TagName: "v1.5.0", HTMLURL: "https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v1.5.0"}
+		case contains(path, "conpas-ai"):
+			release = githubRelease{TagName: "v1.5.0", HTMLURL: "https://github.com/Thrasno/conpas-ai/releases/tag/v1.5.0"}
 		case contains(path, "engram"):
 			release = githubRelease{TagName: "v0.4.0", HTMLURL: "https://github.com/Gentleman-Programming/engram/releases/tag/v0.4.0"}
 		case contains(path, "gentleman-guardian-angel"):
@@ -331,7 +331,7 @@ func TestCheckAll(t *testing.T) {
 	}
 
 	// gentle-ai: 1.5.0 local == 1.5.0 remote → UpToDate
-	assertResult(t, results[0], "gentle-ai", UpToDate, "1.5.0", "1.5.0")
+	assertResult(t, results[0], "conpas-ai", UpToDate, "1.5.0", "1.5.0")
 
 	// engram: 0.3.2 local < 0.4.0 remote → UpdateAvailable
 	assertResult(t, results[1], "engram", UpdateAvailable, "0.3.2", "0.4.0")
@@ -437,21 +437,21 @@ func TestUpdateHint(t *testing.T) {
 	}{
 		{
 			name:    "gentle-ai macOS",
-			tool:    ToolInfo{Name: "gentle-ai"},
+			tool:    ToolInfo{Name: "conpas-ai"},
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
-			want:    "brew upgrade gentle-ai",
+			want:    "brew upgrade conpas-ai",
 		},
 		{
 			name:    "gentle-ai linux",
-			tool:    ToolInfo{Name: "gentle-ai"},
+			tool:    ToolInfo{Name: "conpas-ai"},
 			profile: system.PlatformProfile{OS: "linux", PackageManager: "apt"},
-			want:    "curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash",
+			want:    "curl -fsSL https://raw.githubusercontent.com/Thrasno/conpas-ai/main/scripts/install.sh | bash",
 		},
 		{
 			name:    "gentle-ai windows",
-			tool:    ToolInfo{Name: "gentle-ai"},
+			tool:    ToolInfo{Name: "conpas-ai"},
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
-			want:    "irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex",
+			want:    "irm https://raw.githubusercontent.com/Thrasno/conpas-ai/main/scripts/install.ps1 | iex",
 		},
 		{
 			name:    "engram macOS brew",
@@ -463,13 +463,13 @@ func TestUpdateHint(t *testing.T) {
 			name:    "engram linux",
 			tool:    ToolInfo{Name: "engram"},
 			profile: system.PlatformProfile{OS: "linux", PackageManager: "apt"},
-			want:    "gentle-ai upgrade (downloads pre-built binary)",
+			want:    "conpas-ai upgrade (downloads pre-built binary)",
 		},
 		{
 			name:    "engram windows",
 			tool:    ToolInfo{Name: "engram"},
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
-			want:    "gentle-ai upgrade (downloads pre-built binary)",
+			want:    "conpas-ai upgrade (downloads pre-built binary)",
 		},
 		{
 			name:    "gga macOS brew",
@@ -638,7 +638,7 @@ func TestRegistryContents(t *testing.T) {
 		owner string
 		repo  string
 	}{
-		"gentle-ai": {owner: "Gentleman-Programming", repo: "gentle-ai"},
+		"conpas-ai": {owner: "Thrasno", repo: "conpas-ai"},
 		"engram":    {owner: "Gentleman-Programming", repo: "engram"},
 		"gga":       {owner: "Gentleman-Programming", repo: "gentleman-guardian-angel"},
 	}
@@ -867,8 +867,8 @@ func TestCheckFiltered_DevBuildSemanticsForGentleAI(t *testing.T) {
 	}
 
 	r := results[0]
-	if r.Tool.Name != "gentle-ai" {
-		t.Fatalf("tool = %q, want gentle-ai", r.Tool.Name)
+	if r.Tool.Name != "conpas-ai" {
+		t.Fatalf("tool = %q, want conpas-ai", r.Tool.Name)
 	}
 
 	// Dev build should be reported as DevBuild status, not VersionUnknown or UpdateAvailable.
@@ -887,7 +887,7 @@ func TestCheckFiltered_DevBuildSkipNotEligible(t *testing.T) {
 		path := r.URL.Path
 		var release githubRelease
 		switch {
-		case contains(path, "gentle-ai"):
+		case contains(path, "conpas-ai"):
 			release = githubRelease{TagName: "v9.9.9"}
 		case contains(path, "engram"):
 			release = githubRelease{TagName: "v2.0.0"}

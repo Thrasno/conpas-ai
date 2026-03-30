@@ -6,12 +6,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/Thrasno/conpas-ai/internal/agents"
+	"github.com/Thrasno/conpas-ai/internal/agents/claude"
+	"github.com/Thrasno/conpas-ai/internal/agents/opencode"
+	"github.com/Thrasno/conpas-ai/internal/agents/vscode"
+	"github.com/Thrasno/conpas-ai/internal/model"
+	"github.com/Thrasno/conpas-ai/internal/system"
 )
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }

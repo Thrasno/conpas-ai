@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/Thrasno/conpas-ai/internal/agents"
+	"github.com/Thrasno/conpas-ai/internal/components/filemerge"
+	"github.com/Thrasno/conpas-ai/internal/model"
 )
 
 type InjectionResult struct {

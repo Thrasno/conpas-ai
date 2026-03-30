@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/Thrasno/conpas-ai/internal/backup"
+	"github.com/Thrasno/conpas-ai/internal/model"
 )
 
 // TestListBackupsNewestFirst verifies that ListBackups returns manifests sorted

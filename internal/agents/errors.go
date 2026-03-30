@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/Thrasno/conpas-ai/internal/model"
 )
 
 var (

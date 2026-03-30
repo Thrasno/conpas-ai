@@ -9,18 +9,18 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Thrasno/conpas-ai/internal/backup"
+	"github.com/Thrasno/conpas-ai/internal/cli"
+	"github.com/Thrasno/conpas-ai/internal/model"
+	"github.com/Thrasno/conpas-ai/internal/pipeline"
+	"github.com/Thrasno/conpas-ai/internal/planner"
+	"github.com/Thrasno/conpas-ai/internal/state"
+	"github.com/Thrasno/conpas-ai/internal/system"
+	"github.com/Thrasno/conpas-ai/internal/tui"
+	"github.com/Thrasno/conpas-ai/internal/update"
+	"github.com/Thrasno/conpas-ai/internal/update/upgrade"
+	"github.com/Thrasno/conpas-ai/internal/verify"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/internal/state"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/tui"
-	"github.com/gentleman-programming/gentle-ai/internal/update"
-	"github.com/gentleman-programming/gentle-ai/internal/update/upgrade"
-	"github.com/gentleman-programming/gentle-ai/internal/verify"
 )
 
 // Version is set from main via ldflags at build time.
@@ -88,7 +88,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 
 	switch args[0] {
 	case "version", "--version", "-v":
-		_, _ = fmt.Fprintf(stdout, "gentle-ai %s\n", Version)
+		_, _ = fmt.Fprintf(stdout, "conpas-ai %s\n", Version)
 		return nil
 	case "update":
 		profile := cli.ResolveInstallProfile(result)
@@ -129,7 +129,7 @@ func runUpdate(ctx context.Context, currentVersion string, profile system.Platfo
 	return updateCheckError(results)
 }
 
-// runUpgrade handles the `gentle-ai upgrade [--dry-run] [tool...]` command.
+// runUpgrade handles the `conpas-ai upgrade [--dry-run] [tool...]` command.
 //
 // This command:
 //   - Checks for available updates for managed tools (gentle-ai, engram, gga)

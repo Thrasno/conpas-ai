@@ -25,7 +25,7 @@
 Just run it — the Bubbletea TUI guides you through agent selection, components, skills, and presets:
 
 ```bash
-gentle-ai
+conpas-ai
 ```
 
 ---
@@ -38,67 +38,67 @@ First-time setup — detects your tools, configures agents, injects all componen
 
 ```bash
 # Full ecosystem for multiple agents
-gentle-ai install \
+conpas-ai install \
   --agent claude-code,opencode,gemini-cli \
   --preset full
 
 # Minimal setup for Cursor
-gentle-ai install \
+conpas-ai install \
   --agent cursor \
   --preset minimal
 
 # Pick specific components and skills
-gentle-ai install \
+conpas-ai install \
   --agent claude-code \
   --component engram,sdd,skills,context7,persona,permissions \
   --skill go-testing,skill-creator,branch-pr,issue-creation \
   --persona argentino
 
 # Dry-run first (preview plan without applying changes)
-gentle-ai install --dry-run \
+conpas-ai install --dry-run \
   --agent claude-code,opencode \
   --preset full
 ```
 
 ### sync
 
-Refresh managed assets to the current version. Use after `brew upgrade gentle-ai` or when you want your local configs aligned with the latest release. Does NOT reinstall binaries (engram, GGA) — only updates prompt content, skills, MCP configs, and SDD orchestrators.
+Refresh managed assets to the current version. Use after `brew upgrade conpas-ai` or when you want your local configs aligned with the latest release. Does NOT reinstall binaries (engram, GGA) — only updates prompt content, skills, MCP configs, and SDD orchestrators.
 
 ```bash
 # Sync all installed agents
-gentle-ai sync
+conpas-ai sync
 
 # Sync specific agents only
-gentle-ai sync --agent cursor --agent windsurf
+conpas-ai sync --agent cursor --agent windsurf
 
 # Sync a specific component
-gentle-ai sync --component sdd
-gentle-ai sync --component skills
-gentle-ai sync --component engram
+conpas-ai sync --component sdd
+conpas-ai sync --component skills
+conpas-ai sync --component engram
 ```
 
 Sync is safe and idempotent — running it twice produces no changes the second time.
 
 ### update / upgrade
 
-Check for and install new versions of `gentle-ai` itself:
+Check for and install new versions of `conpas-ai` itself:
 
 ```bash
 # Check if a newer version is available
-gentle-ai update
+conpas-ai update
 
 # Upgrade to the latest release (downloads new binary, replaces current)
-gentle-ai upgrade
+conpas-ai upgrade
 ```
 
-After upgrading, run `gentle-ai sync` to refresh all managed assets to the new version's content.
+After upgrading, run `conpas-ai sync` to refresh all managed assets to the new version's content.
 
 ### version
 
 ```bash
-gentle-ai version
-gentle-ai --version
-gentle-ai -v
+conpas-ai version
+conpas-ai --version
+conpas-ai -v
 ```
 
 ---
@@ -129,22 +129,22 @@ gentle-ai -v
 
 ```bash
 # First time: install everything
-brew install gentleman-programming/tap/gentle-ai
-gentle-ai install --agent claude-code,cursor --preset full
+brew install Thrasno/tap/conpas-ai
+conpas-ai install --agent claude-code,cursor --preset full
 
 # After a new release: upgrade + sync
-brew upgrade gentle-ai
-gentle-ai sync
+brew upgrade conpas-ai
+conpas-ai sync
 
 # Adding a new agent later
-gentle-ai install --agent windsurf --preset full
+conpas-ai install --agent windsurf --preset full
 ```
 
 ---
 
 ## Dependency Management
 
-`gentle-ai` auto-detects prerequisites before installation and provides platform-specific guidance:
+`conpas-ai` auto-detects prerequisites before installation and provides platform-specific guidance:
 
 - **Detected tools**: git, curl, node, npm, brew, go
 - **Version checks**: validates minimum versions where applicable

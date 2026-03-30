@@ -3,9 +3,9 @@
 // isolated from install, pipeline, planner, and config-sync code paths.
 //
 // Import boundary: this package MUST NOT import:
-//   - github.com/gentleman-programming/gentle-ai/internal/pipeline
-//   - github.com/gentleman-programming/gentle-ai/internal/planner
-//   - github.com/gentleman-programming/gentle-ai/internal/cli
+//   - github.com/Thrasno/conpas-ai/internal/pipeline
+//   - github.com/Thrasno/conpas-ai/internal/planner
+//   - github.com/Thrasno/conpas-ai/internal/cli
 package upgrade
 
 import (
@@ -17,11 +17,11 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/update"
+	"github.com/Thrasno/conpas-ai/internal/agents"
+	"github.com/Thrasno/conpas-ai/internal/backup"
+	"github.com/Thrasno/conpas-ai/internal/components/gga"
+	"github.com/Thrasno/conpas-ai/internal/system"
+	"github.com/Thrasno/conpas-ai/internal/update"
 )
 
 // Package-level vars for testability — same pattern as internal/update/detect.go.

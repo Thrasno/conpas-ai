@@ -1,14 +1,14 @@
 version: 2
 
-project_name: gentle-ai
+project_name: conpas-ai
 
 before:
   hooks:
     - go mod tidy
 
 builds:
-  - main: ./cmd/gentle-ai
-    binary: gentle-ai
+  - main: ./cmd/conpas-ai
+    binary: conpas-ai
     env:
       - CGO_ENABLED=0
     goos:
@@ -43,12 +43,12 @@ changelog:
 
 brews:
   - repository:
-      owner: Gentleman-Programming
+      owner: Thrasno
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Formula
-    name: gentle-ai
-    homepage: "https://github.com/Gentleman-Programming/gentle-ai"
-    description: "AI Gentle Stack — One command to configure any AI coding agent on any OS."
+    name: conpas-ai
+    homepage: "https://github.com/Thrasno/conpas-ai"
+    description: "AI Conpas Stack — One command to configure any AI coding agent on any OS."
     license: "MIT"
-    commit_msg_template: "chore: update gentle-ai formula to {{ .Tag }}"
+    commit_msg_template: "chore: update conpas-ai formula to {{ .Tag }}"

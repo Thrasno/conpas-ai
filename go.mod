@@ -1,4 +1,4 @@
-module github.com/gentleman-programming/gentle-ai
+module github.com/Thrasno/conpas-ai
 
 go 1.24
 

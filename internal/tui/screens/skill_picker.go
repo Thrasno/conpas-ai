@@ -3,9 +3,9 @@ package screens
 import (
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/tui/styles"
+	"github.com/Thrasno/conpas-ai/internal/components/skills"
+	"github.com/Thrasno/conpas-ai/internal/model"
+	"github.com/Thrasno/conpas-ai/internal/tui/styles"
 )
 
 // sddSkillIDs are the SDD orchestrator skills shown in the first group.

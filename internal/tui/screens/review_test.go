@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/planner"
+	"github.com/Thrasno/conpas-ai/internal/model"
+	"github.com/Thrasno/conpas-ai/internal/planner"
 )
 
 // ─── Issue #145: Review screen must show individual skills ───────────────────

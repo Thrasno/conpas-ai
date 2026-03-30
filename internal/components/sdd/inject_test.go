@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
-	windsurfagent "github.com/gentleman-programming/gentle-ai/internal/agents/windsurf"
-	"github.com/gentleman-programming/gentle-ai/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/Thrasno/conpas-ai/internal/agents"
+	"github.com/Thrasno/conpas-ai/internal/agents/claude"
+	"github.com/Thrasno/conpas-ai/internal/agents/opencode"
+	windsurfagent "github.com/Thrasno/conpas-ai/internal/agents/windsurf"
+	"github.com/Thrasno/conpas-ai/internal/assets"
+	"github.com/Thrasno/conpas-ai/internal/model"
 	// agents/cursor, agents/gemini, agents/vscode used via agents.NewAdapter()
 )
 

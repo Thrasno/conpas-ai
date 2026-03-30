@@ -3,7 +3,7 @@ package screens
 import (
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/Thrasno/conpas-ai/internal/model"
 )
 
 // TestPersonaOptionsReturns8Items verifies that PersonaOptions returns all 8 personas.

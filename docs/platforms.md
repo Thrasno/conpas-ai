@@ -25,7 +25,7 @@ Release binaries are built for `linux`, `darwin`, and `windows` on both `amd64` 
 - **curl** is pre-installed on Windows 10+ and does not require separate installation.
 - **PowerShell** is the default shell when `$SHELL` is not set.
 - Release archives use `.zip` format on Windows (`.tar.gz` on macOS/Linux).
-- **GGA on Windows** works from both Git Bash and PowerShell. gentle-ai installs a `gga.ps1` shim that automatically delegates to Git Bash, so no manual shell switching is required.
+- **GGA on Windows** works from both Git Bash and PowerShell. conpas-ai installs a `gga.ps1` shim that automatically delegates to Git Bash, so no manual shell switching is required.
 
 ---
 

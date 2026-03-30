@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/tui"
+	"github.com/Thrasno/conpas-ai/internal/cli"
+	"github.com/Thrasno/conpas-ai/internal/planner"
+	"github.com/Thrasno/conpas-ai/internal/system"
+	"github.com/Thrasno/conpas-ai/internal/tui"
 )
 
 func TestInstallDefaultsMatchTUIModelDefaults(t *testing.T) {
