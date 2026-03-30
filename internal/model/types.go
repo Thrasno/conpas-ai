@@ -54,14 +54,21 @@ const (
 	SkillJudgmentDay   SkillID = "judgment-day"
 	SkillBranchPR      SkillID = "branch-pr"
 	SkillIssueCreation SkillID = "issue-creation"
+	SkillZohoDeluge    SkillID = "zoho-deluge"
 )
 
 type PersonaID string
 
 const (
-	PersonaGentleman PersonaID = "gentleman"
-	PersonaNeutral   PersonaID = "neutral"
-	PersonaCustom    PersonaID = "custom"
+	PersonaGentleman        PersonaID = "gentleman"
+	PersonaArgentino        PersonaID = "argentino"
+	PersonaNeutral          PersonaID = "neutral"
+	PersonaGalleguinho      PersonaID = "galleguinho"
+	PersonaAsturianu        PersonaID = "asturianu"
+	PersonaSargentoDeHierro PersonaID = "sargentoDeHierro"
+	PersonaStark            PersonaID = "stark"
+	PersonaLittleYoda       PersonaID = "littleYoda"
+	PersonaCustom           PersonaID = "custom"
 )
 
 // SystemPromptStrategy defines how an agent's system prompt file is managed.
@@ -96,7 +103,8 @@ const (
 type PresetID string
 
 const (
-	PresetFullGentleman PresetID = "full-gentleman"
+	PresetFull          PresetID = "full"
+	PresetFullGentleman PresetID = PresetFull // Deprecated: alias for backward compatibility
 	PresetEcosystemOnly PresetID = "ecosystem-only"
 	PresetMinimal       PresetID = "minimal"
 	PresetCustom        PresetID = "custom"

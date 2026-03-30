@@ -39,8 +39,8 @@ go run ./cmd/gentle-ai install \
   --agent claude-code,opencode \
   --component engram,sdd,skills \
   --skill sdd-apply \
-  --persona gentleman \
-  --preset full-gentleman \
+  --persona argentino \
+  --preset full \
   --dry-run
 ```
 

@@ -7,8 +7,37 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/tui/styles"
 )
 
+// personaLabels maps each persona ID to its human-readable TUI label.
+var personaLabels = map[model.PersonaID]string{
+	model.PersonaArgentino:        "Argentino - Rioplatense Spanish, passionate teacher",
+	model.PersonaNeutral:          "Neutral - Professional, language-agnostic",
+	model.PersonaGalleguinho:      "Galleguinho - Galician retranca (constructive irony)",
+	model.PersonaAsturianu:        "Asturianu - Asturian expressions, friendly",
+	model.PersonaSargentoDeHierro: "Sargento de Hierro - Minimal verbosity, hyper-technical",
+	model.PersonaStark:            "Stark - Tony Stark personality (genius, witty)",
+	model.PersonaLittleYoda:       "Little Yoda - Cryptic Jedi Master (ERP wisdom)",
+	model.PersonaCustom:           "Custom - Use your own persona file",
+}
+
+// PersonaLabel returns the human-readable TUI label for a persona.
+func PersonaLabel(persona model.PersonaID) string {
+	if label, ok := personaLabels[persona]; ok {
+		return label
+	}
+	return string(persona)
+}
+
 func PersonaOptions() []model.PersonaID {
-	return []model.PersonaID{model.PersonaGentleman, model.PersonaNeutral, model.PersonaCustom}
+	return []model.PersonaID{
+		model.PersonaArgentino,
+		model.PersonaNeutral,
+		model.PersonaGalleguinho,
+		model.PersonaAsturianu,
+		model.PersonaSargentoDeHierro,
+		model.PersonaStark,
+		model.PersonaLittleYoda,
+		model.PersonaCustom,
+	}
 }
 
 func RenderPersona(selected model.PersonaID, cursor int) string {
@@ -22,7 +51,7 @@ func RenderPersona(selected model.PersonaID, cursor int) string {
 	for idx, persona := range PersonaOptions() {
 		isSelected := persona == selected
 		focused := idx == cursor
-		b.WriteString(renderRadio(string(persona), isSelected, focused))
+		b.WriteString(renderRadio(PersonaLabel(persona), isSelected, focused))
 	}
 
 	b.WriteString("\n")

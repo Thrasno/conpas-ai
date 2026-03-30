@@ -186,8 +186,9 @@ func Inject(homeDir string, adapter agents.Adapter, persona model.PersonaID) (In
 		}
 	}
 
-	// 3. Gentleman-only: write output style + merge into settings (if agent supports it).
-	if persona == model.PersonaGentleman && adapter.SupportsOutputStyles() {
+	// 3. Argentino/Gentleman: write output style + merge into settings (if agent supports it).
+	// PersonaGentleman is a backward-compat alias for PersonaArgentino.
+	if (persona == model.PersonaArgentino || persona == model.PersonaGentleman) && adapter.SupportsOutputStyles() {
 		outputStyleDir := adapter.OutputStyleDir(homeDir)
 		if outputStyleDir != "" {
 			outputStylePath := outputStyleDir + "/gentleman.md"
@@ -217,25 +218,34 @@ func Inject(homeDir string, adapter agents.Adapter, persona model.PersonaID) (In
 }
 
 func personaContent(agent model.AgentID, persona model.PersonaID) string {
-	switch persona {
-	case model.PersonaNeutral:
-		// Neutral persona: same teacher, same philosophy, no regional language.
-		return assets.MustRead("generic/persona-neutral.md")
-	case model.PersonaCustom:
+	if persona == model.PersonaCustom {
 		return ""
-	default:
-		// Gentleman persona — try agent-specific asset, then generic fallback.
-		switch agent {
-		case model.AgentClaudeCode:
-			return assets.MustRead("claude/persona-gentleman.md")
-		case model.AgentOpenCode:
-			return assets.MustRead("opencode/persona-gentleman.md")
-		default:
-			// Generic persona includes Gentleman personality + skills table + SDD orchestrator.
-			// Used by Gemini CLI, Cursor, VS Code Copilot, and any future agents.
-			return assets.MustRead("generic/persona-gentleman.md")
-		}
 	}
+	base := assets.MustRead(agentBaseFile(agent))
+	variant := assets.MustRead(variantFile(effectivePersona(persona)))
+	return base + "\n\n" + variant
+}
+
+// effectivePersona resolves aliases. PersonaGentleman is an alias for PersonaArgentino.
+func effectivePersona(persona model.PersonaID) model.PersonaID {
+	if persona == model.PersonaGentleman {
+		return model.PersonaArgentino
+	}
+	return persona
+}
+
+// agentBaseFile returns the persona base asset path for the given agent.
+// Claude Code gets a specialized base with bat/rg/fd rules and ~/.claude/skills paths.
+func agentBaseFile(agent model.AgentID) string {
+	if agent == model.AgentClaudeCode {
+		return "claude/persona-base.md"
+	}
+	return "generic/persona-base.md"
+}
+
+// variantFile returns the generic variant asset path for the given persona.
+func variantFile(persona model.PersonaID) string {
+	return fmt.Sprintf("generic/persona-%s.md", persona)
 }
 
 func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
@@ -270,7 +280,7 @@ var osReadFile = func(path string) ([]byte, error) {
 // persona text before them. Returns ("", false) when no preservation is needed
 // (empty file, Gentleman persona, or no managed markers found).
 func preserveManagedSections(existing, newPersona string, persona model.PersonaID) (string, bool) {
-	if existing == "" || persona == model.PersonaGentleman {
+	if existing == "" || persona != model.PersonaCustom {
 		return "", false
 	}
 

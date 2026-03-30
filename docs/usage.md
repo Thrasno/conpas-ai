@@ -8,8 +8,14 @@
 
 | Persona | ID | Description |
 |---------|-----|-------------|
-| Gentleman | `gentleman` | Teaching-oriented mentor persona — pushes back on bad practices, explains the why |
+| Argentino | `argentino` | Teaching-oriented mentor with Rioplatense Spanish flavor — passionate, direct, uses voseo |
+| Gentleman | `gentleman` | Alias for `argentino` — preserved for backward compatibility |
 | Neutral | `neutral` | Same teacher, same philosophy, no regional language — warm and professional |
+| Galleguinho | `galleguinho` | Galician-Spanish flavor — friendly warmth with Galician expressions |
+| Asturianu | `asturianu` | Asturian dialect flavor — peer-level, fun expressions like "guaje" and "ta de mieu" |
+| Sargento de Hierro | `sargentoDeHierro` | Drill-sergeant mode — blunt, demanding, zero tolerance for excuses |
+| Stark | `stark` | Tony Stark mode — brilliant, confident, tech-billionaire wit |
+| Little Yoda | `littleYoda` | Cryptic Jedi Master — Yoda syntax, ERP wisdom, minimal verbosity |
 | Custom | `custom` | Bring your own persona instructions |
 
 ---
@@ -34,7 +40,7 @@ First-time setup — detects your tools, configures agents, injects all componen
 # Full ecosystem for multiple agents
 gentle-ai install \
   --agent claude-code,opencode,gemini-cli \
-  --preset full-gentleman
+  --preset full
 
 # Minimal setup for Cursor
 gentle-ai install \
@@ -46,12 +52,12 @@ gentle-ai install \
   --agent claude-code \
   --component engram,sdd,skills,context7,persona,permissions \
   --skill go-testing,skill-creator,branch-pr,issue-creation \
-  --persona gentleman
+  --persona argentino
 
 # Dry-run first (preview plan without applying changes)
 gentle-ai install --dry-run \
   --agent claude-code,opencode \
-  --preset full-gentleman
+  --preset full
 ```
 
 ### sync
@@ -104,8 +110,8 @@ gentle-ai -v
 | `--agent`, `--agents` | Agents to configure (comma-separated) |
 | `--component`, `--components` | Components to install (comma-separated) |
 | `--skill`, `--skills` | Skills to install (comma-separated) |
-| `--persona` | Persona mode: `gentleman`, `neutral`, `custom` |
-| `--preset` | Preset: `full-gentleman`, `ecosystem-only`, `minimal`, `custom` |
+| `--persona` | Persona mode: `argentino`, `gentleman` (alias), `neutral`, `galleguinho`, `asturianu`, `sargentoDeHierro`, `stark`, `littleYoda`, `custom` |
+| `--preset` | Preset: `full`, `full-gentleman` (alias), `ecosystem-only`, `minimal`, `custom` |
 | `--dry-run` | Preview the install plan without applying changes |
 
 ## CLI Flags (sync)
@@ -124,14 +130,14 @@ gentle-ai -v
 ```bash
 # First time: install everything
 brew install gentleman-programming/tap/gentle-ai
-gentle-ai install --agent claude-code,cursor --preset full-gentleman
+gentle-ai install --agent claude-code,cursor --preset full
 
 # After a new release: upgrade + sync
 brew upgrade gentle-ai
 gentle-ai sync
 
 # Adding a new agent later
-gentle-ai install --agent windsurf --preset full-gentleman
+gentle-ai install --agent windsurf --preset full
 ```
 
 ---

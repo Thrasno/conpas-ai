@@ -843,7 +843,7 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 			if adapter.SupportsSystemPrompt() {
 				paths = append(paths, adapter.SystemPromptFile(homeDir))
 			}
-			if selection.Persona == model.PersonaGentleman {
+			if selection.Persona == model.PersonaGentleman || selection.Persona == model.PersonaArgentino {
 				if adapter.SupportsOutputStyles() {
 					paths = append(paths, adapter.OutputStyleDir(homeDir)+"/gentleman.md")
 					if p := adapter.SettingsPath(homeDir); p != "" {

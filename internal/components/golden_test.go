@@ -48,7 +48,7 @@ func TestGoldenConfigs(t *testing.T) {
 	}
 
 	presets := []presetMapping{
-		{Preset: "full-gentleman", Skills: toStringSlice(skills.SkillsForPreset("full-gentleman"))},
+		{Preset: "full", Skills: toStringSlice(skills.SkillsForPreset("full"))},
 		{Preset: "ecosystem-only", Skills: toStringSlice(skills.SkillsForPreset("ecosystem-only"))},
 		{Preset: "minimal", Skills: toStringSlice(skills.SkillsForPreset("minimal"))},
 	}
@@ -376,6 +376,21 @@ func TestGoldenPersona_Claude_Neutral(t *testing.T) {
 	assertGolden(t, "persona-claude-neutral.golden", claudeMD)
 }
 
+func TestGoldenPersona_Claude_Argentino(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := persona.Inject(home, claudeAdapter(), model.PersonaArgentino)
+	if err != nil {
+		t.Fatalf("persona.Inject(claude, argentino) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("persona.Inject(claude, argentino) changed = false")
+	}
+
+	claudeMD := readTestFile(t, filepath.Join(home, ".claude", "CLAUDE.md"))
+	assertGolden(t, "persona-claude-argentino.golden", claudeMD)
+}
+
 func TestGoldenPersona_OpenCode_Gentleman(t *testing.T) {
 	home := t.TempDir()
 
@@ -404,6 +419,81 @@ func TestGoldenPersona_OpenCode_Neutral(t *testing.T) {
 
 	agentsMD := readTestFile(t, filepath.Join(home, ".config", "opencode", "AGENTS.md"))
 	assertGolden(t, "persona-opencode-neutral.golden", agentsMD)
+}
+
+func TestGoldenPersona_Claude_Galleguinho(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := persona.Inject(home, claudeAdapter(), model.PersonaGalleguinho)
+	if err != nil {
+		t.Fatalf("persona.Inject(claude, galleguinho) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("persona.Inject(claude, galleguinho) changed = false")
+	}
+
+	claudeMD := readTestFile(t, filepath.Join(home, ".claude", "CLAUDE.md"))
+	assertGolden(t, "persona-claude-galleguinho.golden", claudeMD)
+}
+
+func TestGoldenPersona_Claude_Asturianu(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := persona.Inject(home, claudeAdapter(), model.PersonaAsturianu)
+	if err != nil {
+		t.Fatalf("persona.Inject(claude, asturianu) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("persona.Inject(claude, asturianu) changed = false")
+	}
+
+	claudeMD := readTestFile(t, filepath.Join(home, ".claude", "CLAUDE.md"))
+	assertGolden(t, "persona-claude-asturianu.golden", claudeMD)
+}
+
+func TestGoldenPersona_Claude_SargentoDeHierro(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := persona.Inject(home, claudeAdapter(), model.PersonaSargentoDeHierro)
+	if err != nil {
+		t.Fatalf("persona.Inject(claude, sargentoDeHierro) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("persona.Inject(claude, sargentoDeHierro) changed = false")
+	}
+
+	claudeMD := readTestFile(t, filepath.Join(home, ".claude", "CLAUDE.md"))
+	assertGolden(t, "persona-claude-sargentoDeHierro.golden", claudeMD)
+}
+
+func TestGoldenPersona_Claude_Stark(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := persona.Inject(home, claudeAdapter(), model.PersonaStark)
+	if err != nil {
+		t.Fatalf("persona.Inject(claude, stark) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("persona.Inject(claude, stark) changed = false")
+	}
+
+	claudeMD := readTestFile(t, filepath.Join(home, ".claude", "CLAUDE.md"))
+	assertGolden(t, "persona-claude-stark.golden", claudeMD)
+}
+
+func TestGoldenPersona_Claude_LittleYoda(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := persona.Inject(home, claudeAdapter(), model.PersonaLittleYoda)
+	if err != nil {
+		t.Fatalf("persona.Inject(claude, littleYoda) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("persona.Inject(claude, littleYoda) changed = false")
+	}
+
+	claudeMD := readTestFile(t, filepath.Join(home, ".claude", "CLAUDE.md"))
+	assertGolden(t, "persona-claude-littleYoda.golden", claudeMD)
 }
 
 func TestGoldenPersona_Claude_Custom(t *testing.T) {

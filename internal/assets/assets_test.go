@@ -13,11 +13,19 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 	expectedFiles := []string{
 		// Claude agent files
 		"claude/engram-protocol.md",
-		"claude/persona-gentleman.md",
+		"claude/persona-base.md",
 		"claude/sdd-orchestrator.md",
 
+		// Generic persona files
+		"generic/persona-base.md",
+		"generic/persona-argentino.md",
+		"generic/persona-neutral.md",
+		"generic/persona-galleguinho.md",
+		"generic/persona-asturianu.md",
+		"generic/persona-sargentoDeHierro.md",
+		"generic/persona-stark.md",
+
 		// OpenCode agent files
-		"opencode/persona-gentleman.md",
 		"opencode/sdd-overlay-single.json",
 		"opencode/sdd-overlay-multi.json",
 		"opencode/commands/sdd-apply.md",
@@ -67,6 +75,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		// Foundation skills
 		"skills/go-testing/SKILL.md",
 		"skills/skill-creator/SKILL.md",
+		"skills/zoho-deluge/SKILL.md",
 	}
 
 	for _, path := range expectedFiles {
@@ -99,7 +108,7 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 		seen[entry.Name()] = true
 	}
 
-	for _, name := range []string{"commands", "plugins", "persona-gentleman.md", "sdd-overlay-single.json", "sdd-overlay-multi.json"} {
+	for _, name := range []string{"commands", "plugins", "sdd-overlay-single.json", "sdd-overlay-multi.json"} {
 		if !seen[name] {
 			t.Fatalf("opencode embedded assets missing %q", name)
 		}
@@ -154,9 +163,9 @@ func TestEmbeddedAssetCount(t *testing.T) {
 		}
 	}
 
-	// We expect 16 skill directories (9 SDD + judgment-day + 5 foundation + _shared).
-	if skillDirs != 16 {
-		t.Fatalf("expected 16 skill directories, got %d", skillDirs)
+	// We expect 17 skill directories (9 SDD + judgment-day + 5 foundation + zoho-deluge + _shared).
+	if skillDirs != 17 {
+		t.Fatalf("expected 17 skill directories, got %d", skillDirs)
 	}
 
 	// Verify each skill directory has a SKILL.md.
@@ -176,6 +185,40 @@ func TestEmbeddedAssetCount(t *testing.T) {
 		skillPath := "skills/" + entry.Name() + "/SKILL.md"
 		if _, err := Read(skillPath); err != nil {
 			t.Fatalf("skill directory %q missing SKILL.md: %v", entry.Name(), err)
+		}
+	}
+}
+
+// TestPersonaFilesHaveZohoDelugeAutoLoad verifies that the persona base files
+// contain an auto-load row for the zoho-deluge skill.
+func TestPersonaFilesHaveZohoDelugeAutoLoad(t *testing.T) {
+	personaFiles := []string{
+		"claude/persona-base.md",
+		"generic/persona-base.md",
+	}
+
+	for _, path := range personaFiles {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+			if !strings.Contains(content, "zoho-deluge") {
+				t.Fatalf("%q missing zoho-deluge auto-load row in Skills table", path)
+			}
+		})
+	}
+}
+
+// TestZohoDelugeSkillHasFrontmatter verifies that the zoho-deluge SKILL.md
+// contains the required YAML frontmatter block for skill-registry compatibility.
+func TestZohoDelugeSkillHasFrontmatter(t *testing.T) {
+	content := MustRead("skills/zoho-deluge/SKILL.md")
+
+	for _, want := range []string{
+		"name: zoho-deluge",
+		"license: Apache-2.0",
+		"author: gentleman-programming",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("skills/zoho-deluge/SKILL.md missing frontmatter field %q", want)
 		}
 	}
 }
@@ -234,6 +277,89 @@ func TestOpenCodeSDDOverlaySubagentsAreExplicitExecutors(t *testing.T) {
 					if !strings.Contains(prompt, want) {
 						t.Fatalf("%q phase %s prompt missing %q", assetPath, phase, want)
 					}
+				}
+			}
+		})
+	}
+}
+
+// TestPersonaBaseHasAllSections verifies that both persona-base.md files (generic
+// and claude) contain the 7 required common sections.
+func TestPersonaBaseHasAllSections(t *testing.T) {
+	requiredSections := []string{
+		"## Rules",
+		"## Personality",
+		"## Tone",
+		"## Philosophy",
+		"## Expertise",
+		"## Behavior",
+		"## Skills",
+	}
+
+	baseFiles := []string{
+		"generic/persona-base.md",
+		"claude/persona-base.md",
+	}
+
+	for _, path := range baseFiles {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+			for _, section := range requiredSections {
+				if !strings.Contains(content, section) {
+					t.Errorf("%q missing required section %q", path, section)
+				}
+			}
+		})
+	}
+}
+
+// TestPersonaVariantsHaveLanguage verifies that all 6 variant files contain
+// the ## Language section.
+func TestPersonaVariantsHaveLanguage(t *testing.T) {
+	variantFiles := []string{
+		"generic/persona-argentino.md",
+		"generic/persona-neutral.md",
+		"generic/persona-galleguinho.md",
+		"generic/persona-asturianu.md",
+		"generic/persona-sargentoDeHierro.md",
+		"generic/persona-stark.md",
+	}
+
+	for _, path := range variantFiles {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+			if !strings.Contains(content, "## Language") {
+				t.Errorf("%q missing required ## Language section", path)
+			}
+		})
+	}
+}
+
+// TestPersonaVariantsNoDuplication verifies that variant files do NOT contain
+// sections that belong exclusively to the base file (Rules, Tone, Philosophy).
+func TestPersonaVariantsNoDuplication(t *testing.T) {
+	variantFiles := []string{
+		"generic/persona-argentino.md",
+		"generic/persona-neutral.md",
+		"generic/persona-galleguinho.md",
+		"generic/persona-asturianu.md",
+		"generic/persona-sargentoDeHierro.md",
+	}
+
+	forbiddenSections := []string{
+		"## Rules",
+		"## Tone",
+		"## Philosophy",
+		"## Expertise",
+		"## Behavior",
+	}
+
+	for _, path := range variantFiles {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+			for _, section := range forbiddenSections {
+				if strings.Contains(content, section) {
+					t.Errorf("%q must not contain base section %q (move it to persona-base.md)", path, section)
 				}
 			}
 		})

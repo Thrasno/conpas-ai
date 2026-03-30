@@ -27,7 +27,7 @@ func ParseInstallFlags(args []string) (InstallFlags, error) {
 	registerListFlag(fs, "components", &opts.Components)
 	registerListFlag(fs, "skill", &opts.Skills)
 	registerListFlag(fs, "skills", &opts.Skills)
-	fs.StringVar(&opts.Persona, "persona", "", "persona to apply")
+	fs.StringVar(&opts.Persona, "persona", "", "persona to apply: argentino (default), neutral, galleguinho, asturianu, sargentoDeHierro, stark, littleYoda, custom; 'gentleman' is an alias for argentino")
 	fs.StringVar(&opts.Preset, "preset", "", "preset to apply")
 	fs.StringVar(&opts.SDDMode, "sdd-mode", "", "SDD orchestrator mode: single or multi (default: single)")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "preview plan without executing")

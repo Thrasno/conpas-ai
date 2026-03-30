@@ -12,7 +12,7 @@
 | SDD | `sdd` | Spec-Driven Development workflow (9 phases) — the agent handles SDD organically when the task warrants it, or when you ask; you don't need to learn the commands |
 | Skills | `skills` | Curated coding skill library |
 | Context7 | `context7` | MCP server for live framework/library documentation |
-| Persona | `persona` | Gentleman, neutral, or custom behavior mode |
+| Persona | `persona` | Language variant behavior mode: argentino, neutral, galleguinho, asturianu, sargentoDeHierro, stark, littleYoda, or custom |
 | Permissions | `permissions` | Security-first defaults and guardrails |
 | GGA | `gga` | Gentleman Guardian Angel — AI provider switcher |
 | Theme | `theme` | Gentleman Kanagawa theme overlay |
@@ -62,7 +62,7 @@ gga install
 | Branch & PR | `branch-pr` | PR creation workflow with conventional commits, branch naming, and issue-first enforcement |
 | Issue Creation | `issue-creation` | Issue filing workflow with bug report and feature request templates |
 
-These foundation skills are installed by default with both `full-gentleman` and `ecosystem-only` presets.
+These foundation skills are installed by default with both `full` and `ecosystem-only` presets.
 
 ### Coding Skills (separate repository)
 
@@ -74,7 +74,7 @@ For framework-specific skills (React 19, Angular, TypeScript, Tailwind 4, Zod 4,
 
 | Preset | ID | What's Included |
 |--------|-----|-----------------|
-| Full Gentleman | `full-gentleman` | All components (Engram + SDD + Skills + Context7 + GGA + Persona + Permissions + Theme) + all skills + gentleman persona |
-| Ecosystem Only | `ecosystem-only` | Core components (Engram + SDD + Skills + Context7 + GGA) + all skills + gentleman persona |
+| Full | `full` | All components (Engram + SDD + Skills + Context7 + GGA + Persona + Permissions + Theme) + all skills + persona selected in setup |
+| Ecosystem Only | `ecosystem-only` | Core components (Engram + SDD + Skills + Context7 + GGA) + all skills + argentino persona (default) |
 | Minimal | `minimal` | Engram + SDD skills only |
 | Custom | `custom` | You pick components, skills, and persona individually |

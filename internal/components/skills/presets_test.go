@@ -70,6 +70,18 @@ func TestSkillsForPresetCustomReturnsNil(t *testing.T) {
 	}
 }
 
+// TestFoundationSkillsContainsZohoDeluge verifies zoho-deluge is part of
+// the ecosystem-only preset (i.e., in foundationSkills).
+func TestFoundationSkillsContainsZohoDeluge(t *testing.T) {
+	skills := SkillsForPreset(model.PresetEcosystemOnly)
+	for _, id := range skills {
+		if id == model.SkillZohoDeluge {
+			return
+		}
+	}
+	t.Fatal("zoho-deluge missing from ecosystem-only preset (not in foundationSkills)")
+}
+
 func TestAllSkillIDsIncludesEveryKnownSkill(t *testing.T) {
 	all := AllSkillIDs()
 

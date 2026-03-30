@@ -58,11 +58,23 @@ func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult)
 
 func normalizePersona(value string) (model.PersonaID, error) {
 	if strings.TrimSpace(value) == "" {
-		return model.PersonaGentleman, nil
+		return model.PersonaArgentino, nil
+	}
+
+	// Backward compatibility: "gentleman" is an alias for "argentino".
+	if model.PersonaID(value) == model.PersonaGentleman {
+		return model.PersonaArgentino, nil
 	}
 
 	switch model.PersonaID(value) {
-	case model.PersonaGentleman, model.PersonaNeutral, model.PersonaCustom:
+	case model.PersonaArgentino,
+		model.PersonaNeutral,
+		model.PersonaGalleguinho,
+		model.PersonaAsturianu,
+		model.PersonaSargentoDeHierro,
+		model.PersonaStark,
+		model.PersonaLittleYoda,
+		model.PersonaCustom:
 		return model.PersonaID(value), nil
 	default:
 		return "", fmt.Errorf("unsupported persona %q", value)
@@ -71,11 +83,16 @@ func normalizePersona(value string) (model.PersonaID, error) {
 
 func normalizePreset(value string) (model.PresetID, error) {
 	if strings.TrimSpace(value) == "" {
-		return model.PresetFullGentleman, nil
+		return model.PresetFull, nil
+	}
+
+	// Backward compatibility: "full-gentleman" is an alias for "full".
+	if value == "full-gentleman" {
+		return model.PresetFull, nil
 	}
 
 	switch model.PresetID(value) {
-	case model.PresetFullGentleman, model.PresetEcosystemOnly, model.PresetMinimal, model.PresetCustom:
+	case model.PresetFull, model.PresetEcosystemOnly, model.PresetMinimal, model.PresetCustom:
 		return model.PresetID(value), nil
 	default:
 		return "", fmt.Errorf("unsupported preset %q", value)

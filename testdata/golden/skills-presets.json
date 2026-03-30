@@ -1,6 +1,6 @@
 [
   {
-    "preset": "full-gentleman",
+    "preset": "full",
     "skills": [
       "sdd-init",
       "sdd-explore",
@@ -15,7 +15,8 @@
       "go-testing",
       "skill-creator",
       "branch-pr",
-      "issue-creation"
+      "issue-creation",
+      "zoho-deluge"
     ]
   },
   {
@@ -34,7 +35,8 @@
       "go-testing",
       "skill-creator",
       "branch-pr",
-      "issue-creation"
+      "issue-creation",
+      "zoho-deluge"
     ]
   },
   {

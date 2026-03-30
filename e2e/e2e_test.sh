@@ -421,6 +421,36 @@ test_unknown_command_rejected() {
     fi
 }
 
+# --- Category 1h: Persona variant dry-run acceptance ---
+
+test_dry_run_persona_argentino() {
+    log_test "Dry-run with --persona argentino"
+
+    output=$($BINARY install --agent claude-code --component persona --persona argentino --dry-run 2>&1) || true
+
+    assert_output_contains "$output" "Persona:" "Output contains Persona header"
+    assert_output_contains "$output" "argentino" "Shows argentino persona"
+}
+
+test_dry_run_persona_gentleman_alias() {
+    log_test "Dry-run with --persona gentleman (backward compat alias)"
+
+    output=$($BINARY install --agent claude-code --component persona --persona gentleman --dry-run 2>&1) || true
+
+    # 'gentleman' is accepted (alias for argentino) — should not error
+    assert_output_contains "$output" "Persona:" "Output contains Persona header"
+    assert_output_contains "$output" "gentleman\|argentino" "gentleman alias accepted without error"
+}
+
+test_dry_run_persona_stark() {
+    log_test "Dry-run with --persona stark"
+
+    output=$($BINARY install --agent claude-code --component persona --persona stark --dry-run 2>&1) || true
+
+    assert_output_contains "$output" "Persona:" "Output contains Persona header"
+    assert_output_contains "$output" "stark" "Shows stark persona"
+}
+
 # ===========================================================================
 # TIER 2 — Full install tests (require RUN_FULL_E2E=1)
 # ===========================================================================
@@ -495,6 +525,49 @@ test_cc_persona_neutral() {
         assert_file_not_contains "$HOME/.claude/CLAUDE.md" "Rioplatense\|voseo\|loco\|ponete las pilas" "Neutral persona excludes regional language"
     else
         log_fail "persona (neutral) install command failed"
+    fi
+}
+
+test_cc_persona_argentino() {
+    log_test "Claude Code: persona injection (argentino)"
+    cleanup_test_env
+
+    if $BINARY install --agent claude-code --component persona --persona argentino 2>&1; then
+        assert_file_exists "$HOME/.claude/CLAUDE.md" "CLAUDE.md exists"
+        assert_file_contains "$HOME/.claude/CLAUDE.md" "gentle-ai:persona" "CLAUDE.md has persona section marker"
+        assert_file_contains "$HOME/.claude/CLAUDE.md" "Senior Architect" "Argentino persona has 'Senior Architect'"
+        assert_file_size_min "$HOME/.claude/CLAUDE.md" 200 "Persona section is substantial"
+        # Argentino variant should have the output-style file (same as gentleman alias)
+        assert_file_exists "$HOME/.claude/output-styles/gentleman.md" "Output-style file exists for argentino"
+    else
+        log_fail "persona (argentino) install command failed"
+    fi
+}
+
+test_cc_persona_gentleman_alias() {
+    log_test "Claude Code: persona injection (gentleman alias → argentino)"
+    cleanup_test_env
+
+    if $BINARY install --agent claude-code --component persona --persona gentleman 2>&1; then
+        assert_file_exists "$HOME/.claude/CLAUDE.md" "CLAUDE.md exists"
+        assert_file_contains "$HOME/.claude/CLAUDE.md" "gentle-ai:persona" "CLAUDE.md has persona section marker"
+        assert_file_contains "$HOME/.claude/CLAUDE.md" "Senior Architect" "Gentleman alias maps to argentino persona"
+        assert_file_size_min "$HOME/.claude/CLAUDE.md" 200 "Persona section is substantial"
+    else
+        log_fail "persona (gentleman alias) install command failed"
+    fi
+}
+
+test_cc_persona_stark() {
+    log_test "Claude Code: persona injection (stark)"
+    cleanup_test_env
+
+    if $BINARY install --agent claude-code --component persona --persona stark 2>&1; then
+        assert_file_exists "$HOME/.claude/CLAUDE.md" "CLAUDE.md exists"
+        assert_file_contains "$HOME/.claude/CLAUDE.md" "gentle-ai:persona" "CLAUDE.md has persona section marker"
+        assert_file_size_min "$HOME/.claude/CLAUDE.md" 200 "Stark persona section is substantial"
+    else
+        log_fail "persona (stark) install command failed"
     fi
 }
 
@@ -2057,6 +2130,11 @@ test_invalid_component_rejected
 test_invalid_preset_rejected
 test_unknown_command_rejected
 
+# Category 1h: Persona variant dry-run acceptance
+test_dry_run_persona_argentino
+test_dry_run_persona_gentleman_alias
+test_dry_run_persona_stark
+
 if [ "${RUN_FULL_E2E:-0}" = "1" ]; then
     log_info ""
     log_info "=== Tier 2: Component injection tests ==="
@@ -2066,6 +2144,9 @@ if [ "${RUN_FULL_E2E:-0}" = "1" ]; then
     test_cc_sdd_injection
     test_cc_persona_gentleman
     test_cc_persona_neutral
+    test_cc_persona_argentino
+    test_cc_persona_gentleman_alias
+    test_cc_persona_stark
     test_cc_persona_custom_does_nothing
     test_cc_skills_minimal
     test_cc_skills_full

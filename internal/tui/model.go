@@ -259,7 +259,7 @@ type Model struct {
 func NewModel(detection system.DetectionResult, version string) Model {
 	selection := model.Selection{
 		Agents:     preselectedAgents(detection),
-		Persona:    model.PersonaGentleman,
+		Persona:    model.PersonaArgentino,
 		Preset:     model.PresetFullGentleman,
 		Components: componentsForPreset(model.PresetFullGentleman),
 	}

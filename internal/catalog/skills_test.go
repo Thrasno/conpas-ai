@@ -25,6 +25,17 @@ func TestMVPSkillsCoverAllPresetSkills(t *testing.T) {
 	}
 }
 
+// TestMVPSkillsContainsZohoDeluge verifies that zoho-deluge is registered
+// in the catalog's mvpSkills allowlist.
+func TestMVPSkillsContainsZohoDeluge(t *testing.T) {
+	for _, s := range MVPSkills() {
+		if s.ID == model.SkillZohoDeluge {
+			return
+		}
+	}
+	t.Fatal("zoho-deluge skill missing from catalog mvpSkills")
+}
+
 // TestMVPSkillsNoDuplicates ensures no skill is listed twice in mvpSkills.
 func TestMVPSkillsNoDuplicates(t *testing.T) {
 	seen := make(map[model.SkillID]bool)

@@ -1168,9 +1168,9 @@ type Preset struct {
 
 | Preset | What's Included | Persona | Description |
 |--------|----------------|---------|-------------|
-| `full-gentleman` | All agents detected + Engram + SDD + all skills + MCP + theme | "Your own Gentleman!" | The complete experience. Everything configured, Gentleman persona, dark theme, the works. |
-| `ecosystem-only` | Engram + SDD + skills + MCP for selected agents | Neutral (no persona) | All the tools and workflow, zero personality. For developers who want the ecosystem but prefer their agent's default behavior. |
-| `minimal` | Engram + basic skills for selected agents | Neutral | Just memory and essential skills. Quick and lean. |
+| `full` | All agents detected + Engram + SDD + all skills + MCP + theme | User-selected | The complete experience. Everything configured with your chosen persona, dark theme, the works. |
+| `ecosystem-only` | Engram + SDD + skills + MCP for selected agents | User-selected | All the tools and workflow with your persona. Core ecosystem without theme/permissions. |
+| `minimal` | Engram + basic skills for selected agents | None | Just memory and essential skills. Quick and lean, no persona. |
 | `custom` | User picks each component | User picks | Full control over every aspect. |
 
 ---

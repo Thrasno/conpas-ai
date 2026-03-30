@@ -2,6 +2,14 @@ package model
 
 import "testing"
 
+// TestSkillZohoDelugeConstant verifies that SkillZohoDeluge constant is defined
+// with the correct string value "zoho-deluge".
+func TestSkillZohoDelugeConstant(t *testing.T) {
+	if SkillZohoDeluge != "zoho-deluge" {
+		t.Fatalf("SkillZohoDeluge = %q, want %q", SkillZohoDeluge, "zoho-deluge")
+	}
+}
+
 // TestSelectionHasStrictTDDField verifies that the Selection struct has a
 // StrictTDD bool field.
 func TestSelectionHasStrictTDDField(t *testing.T) {
