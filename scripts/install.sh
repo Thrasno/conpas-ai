@@ -166,7 +166,7 @@ detect_install_method() {
     # go install is last resort because the Go module proxy can lag
     # behind new tags for up to 30 minutes, causing @latest to install
     # a stale version.
-    if command -v brew &>/dev/null; then
+    if command -v brew &>/dev/null && [ "$OS" = "darwin" ]; then
         INSTALL_METHOD="brew"
         success "Homebrew found — will install via brew tap"
     else
