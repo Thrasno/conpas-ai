@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/update"
+	"github.com/Thrasno/conpas-ai/internal/components/engram"
+	"github.com/Thrasno/conpas-ai/internal/system"
+	"github.com/Thrasno/conpas-ai/internal/update"
 )
 
 // engramDownloadFn is the function used to download the engram binary.

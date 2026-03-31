@@ -1,6 +1,6 @@
 package catalog
 
-import "github.com/gentleman-programming/gentle-ai/internal/model"
+import "github.com/Thrasno/conpas-ai/internal/model"
 
 type Agent struct {
 	ID         model.AgentID

@@ -3,7 +3,7 @@ package cli
 import (
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/Thrasno/conpas-ai/internal/model"
 )
 
 // TestNormalizePersonaBackwardCompat verifies that "gentleman" input is silently

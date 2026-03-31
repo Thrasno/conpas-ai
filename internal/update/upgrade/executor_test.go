@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/update"
+	"github.com/Thrasno/conpas-ai/internal/backup"
+	"github.com/Thrasno/conpas-ai/internal/system"
+	"github.com/Thrasno/conpas-ai/internal/update"
 )
 
 // --- helpers ---
@@ -29,7 +29,7 @@ func makeResult(name string, status update.UpdateStatus, oldVer, newVer string, 
 	return update.UpdateResult{
 		Tool: update.ToolInfo{
 			Name:          name,
-			Owner:         "Gentleman-Programming",
+			Owner:         "Thrasno",
 			Repo:          name,
 			InstallMethod: method,
 		},
@@ -46,7 +46,7 @@ func makeResult(name string, status update.UpdateStatus, oldVer, newVer string, 
 // UpdateAvailable or DevBuild status (i.e. only UpToDate and NotInstalled tools).
 func TestExecute_NoopWhenNothingIsExecutable(t *testing.T) {
 	results := []update.UpdateResult{
-		makeResult("gentle-ai", update.UpToDate, "1.0.0", "1.0.0", update.InstallBinary),
+		makeResult("conpas-ai", update.UpToDate, "1.0.0", "1.0.0", update.InstallBinary),
 		makeResult("engram", update.NotInstalled, "", "0.4.0", update.InstallGoInstall),
 		// gga: CheckFailed — should also be omitted from results.
 		makeResult("gga", update.CheckFailed, "", "", update.InstallScript),
@@ -83,7 +83,7 @@ func TestExecute_DevBuildOnlyNoBackupCreated(t *testing.T) {
 	}
 
 	results := []update.UpdateResult{
-		makeResult("gentle-ai", update.DevBuild, "dev", "1.0.0", update.InstallBinary),
+		makeResult("conpas-ai", update.DevBuild, "dev", "1.0.0", update.InstallBinary),
 	}
 
 	report := Execute(context.Background(), results, linuxProfile(), t.TempDir(), false)
@@ -228,7 +228,7 @@ func TestExecute_DevBuildIsSkipped(t *testing.T) {
 	}
 
 	results := []update.UpdateResult{
-		makeResult("gentle-ai", update.DevBuild, "dev", "1.0.0", update.InstallBinary),
+		makeResult("conpas-ai", update.DevBuild, "dev", "1.0.0", update.InstallBinary),
 		makeResult("engram", update.UpdateAvailable, "0.3.0", "0.4.0", update.InstallGoInstall),
 	}
 	results[1].Tool.GoImportPath = "github.com/Gentleman-Programming/engram/cmd/engram"
@@ -238,7 +238,7 @@ func TestExecute_DevBuildIsSkipped(t *testing.T) {
 	// gentle-ai (DevBuild) MUST appear as UpgradeSkipped with a ManualHint.
 	var devResult *ToolUpgradeResult
 	for i := range report.Results {
-		if report.Results[i].ToolName == "gentle-ai" {
+		if report.Results[i].ToolName == "conpas-ai" {
 			r := report.Results[i]
 			devResult = &r
 		}
@@ -315,9 +315,9 @@ func TestExecute_FailureDoesNotImplyConfigLoss(t *testing.T) {
 func TestExecute_InstallNotInvoked(t *testing.T) {
 	// This test is intentionally a documentation-only guard.
 	// The real enforcement is: this package MUST NOT import:
-	//   - github.com/gentleman-programming/gentle-ai/internal/pipeline
-	//   - github.com/gentleman-programming/gentle-ai/internal/planner
-	//   - github.com/gentleman-programming/gentle-ai/internal/cli
+	//   - github.com/Thrasno/conpas-ai/internal/pipeline
+	//   - github.com/Thrasno/conpas-ai/internal/planner
+	//   - github.com/Thrasno/conpas-ai/internal/cli
 	//
 	// If you see those imports appear, the isolation contract is broken.
 	// See TestExecuteImportBoundary for the compile-time enforcement approach.
@@ -338,7 +338,7 @@ func TestExecute_DevBuildSurfacedAsSkipped(t *testing.T) {
 	}
 
 	results := []update.UpdateResult{
-		makeResult("gentle-ai", update.DevBuild, "dev", "1.0.0", update.InstallBinary),
+		makeResult("conpas-ai", update.DevBuild, "dev", "1.0.0", update.InstallBinary),
 		makeResult("engram", update.UpdateAvailable, "0.3.0", "0.4.0", update.InstallGoInstall),
 	}
 	results[1].Tool.GoImportPath = "github.com/Gentleman-Programming/engram/cmd/engram"
@@ -348,7 +348,7 @@ func TestExecute_DevBuildSurfacedAsSkipped(t *testing.T) {
 	// gentle-ai (DevBuild) MUST appear in results as UpgradeSkipped.
 	var devResult *ToolUpgradeResult
 	for i := range report.Results {
-		if report.Results[i].ToolName == "gentle-ai" {
+		if report.Results[i].ToolName == "conpas-ai" {
 			r := report.Results[i]
 			devResult = &r
 		}
@@ -401,9 +401,9 @@ func TestExecute_ManualFallbackSurfacedAsSkippedNotFailed(t *testing.T) {
 	windowsProfile := system.PlatformProfile{OS: "windows", PackageManager: "winget", Supported: true}
 
 	results := []update.UpdateResult{
-		makeResult("gentle-ai", update.UpdateAvailable, "1.0.0", "1.5.0", update.InstallBinary),
+		makeResult("conpas-ai", update.UpdateAvailable, "1.0.0", "1.5.0", update.InstallBinary),
 	}
-	results[0].UpdateHint = "See https://github.com/Gentleman-Programming/gentle-ai/releases"
+	results[0].UpdateHint = "See https://github.com/Thrasno/conpas-ai/releases"
 
 	report := Execute(context.Background(), results, windowsProfile, t.TempDir(), false)
 
@@ -877,9 +877,9 @@ func TestExecute_SkippedUpgradeDoesNotRenderFailureMarker(t *testing.T) {
 	windowsProfile := system.PlatformProfile{OS: "windows", PackageManager: "winget", Supported: true}
 
 	results := []update.UpdateResult{
-		makeResult("gentle-ai", update.UpdateAvailable, "1.0.0", "1.5.0", update.InstallBinary),
+		makeResult("conpas-ai", update.UpdateAvailable, "1.0.0", "1.5.0", update.InstallBinary),
 	}
-	results[0].UpdateHint = "See https://github.com/Gentleman-Programming/gentle-ai/releases"
+	results[0].UpdateHint = "See https://github.com/Thrasno/conpas-ai/releases"
 
 	// Capture the progress output written to the progress writer.
 	var progressBuf bytes.Buffer
