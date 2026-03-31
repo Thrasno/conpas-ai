@@ -2,22 +2,22 @@
 set -euo pipefail
 
 # ============================================================================
-# gentle-ai — Install Script
+# conpas-ai — Install Script
 # One command to configure any AI coding agent on any OS.
 #
 # Usage:
-#   curl -sL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash
+#   curl -sL https://raw.githubusercontent.com/Thrasno/conpas-ai/main/scripts/install.sh | bash
 #
 # Or download and run:
-#   curl -sLO https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh
+#   curl -sLO https://raw.githubusercontent.com/Thrasno/conpas-ai/main/scripts/install.sh
 #   chmod +x install.sh
 #   ./install.sh
 # ============================================================================
 
-GITHUB_OWNER="Gentleman-Programming"
-GITHUB_REPO="gentle-ai"
-BINARY_NAME="gentle-ai"
-BREW_TAP="Gentleman-Programming/homebrew-tap"
+GITHUB_OWNER="Thrasno"
+GITHUB_REPO="conpas-ai"
+BINARY_NAME="conpas-ai"
+BREW_TAP="Thrasno/homebrew-tap"
 
 # ============================================================================
 # Color support
@@ -55,7 +55,7 @@ step()    { echo -e "\n${CYAN}${BOLD}==>${NC} ${BOLD}$*${NC}"; }
 
 show_help() {
     cat <<EOF
-${BOLD}gentle-ai installer${NC}
+${BOLD}conpas-ai installer${NC}
 
 Usage: install.sh [OPTIONS]
 
