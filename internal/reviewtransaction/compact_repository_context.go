@@ -1,0 +1,99 @@
+package reviewtransaction
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io/fs"
+	"path/filepath"
+)
+
+func reconcileCompactRepositoryContext(ctx context.Context, store CompactStore, record CompactRecord) error {
+	for _, intent := range record.EffectIntents {
+		if intent.Class != "repository_context" {
+			continue
+		}
+		markers, err := openCompactEffectMarkerRepository(ctx, store.repo)
+		if err != nil {
+			return err
+		}
+		marker := compactEffectMarker{Schema: compactEffectMarkerSchema, LineageID: record.State.LineageID,
+			AuthorityRevision: record.Revision, EventID: intent.EventID}
+		if existing, readErr := markers.read(marker.LineageID, marker.AuthorityRevision, marker.EventID); readErr == nil {
+			if existing.State == compactEffectApplied {
+				continue
+			}
+			if existing.State == compactEffectBlocked {
+				// refusal:by-design operator-knowledge: the operator must reconcile which repository identity should own the committed context effect
+				return errors.New("repository context effect is blocked by an identity conflict")
+			}
+		} else if !errors.Is(readErr, fs.ErrNotExist) {
+			return readErr
+		}
+
+		binding := ReviewRepositoryContextBinding{LineageID: record.State.LineageID,
+			TargetIdentity: record.State.InitialSnapshot.Identity, Revision: intent.BindingRevision}
+		identity, err := reviewRepositoryIdentity(ctx, store.repo)
+		if err != nil {
+			return writeCompactRepositoryContextMarker(ctx, markers, marker, compactEffectPending, compactEffectPendingTransient, err)
+		}
+		handle := reviewRepositoryContextHandle(binding, identity)
+		contextRecord := reviewRepositoryContextFile{
+			Schema: ReviewRepositoryContextSchema, Handle: handle, LineageID: binding.LineageID,
+			TargetIdentity: binding.TargetIdentity, Revision: binding.Revision,
+			RepositoryIdentity: identity.RepositoryIdentity, RepositoryRoot: identity.RepositoryRoot,
+			GitCommonDir: identity.GitCommonDir, GitDir: identity.GitDir,
+		}
+		payload, err := json.Marshal(contextRecord)
+		if err != nil {
+			return err
+		}
+		if handle != intent.Destination || hashPayloadBytes(payload) != intent.PayloadHash {
+			return writeCompactRepositoryContextMarker(ctx, markers, marker, compactEffectBlocked, compactEffectBlockedConflict,
+				// refusal:by-design operator-knowledge: persisted authority is inconsistent and no operator command may rewrite it
+				errors.New("repository context effect binding or payload does not match committed intent"))
+		}
+		path, err := reviewRepositoryContextPath(handle)
+		if err == nil {
+			var home string
+			home, err = reviewRepositoryContextHome()
+			if err == nil {
+				var root string
+				root, err = ensureReviewRepositoryContextStorageRoot(home, true)
+				if err == nil {
+					err = ensurePrivateLocatorDirectory(root, filepath.Dir(path))
+				}
+			}
+		}
+		if err == nil {
+			err = publishReviewRepositoryContext(path, append(payload, '\n'))
+		}
+		if err != nil {
+			return writeCompactRepositoryContextMarker(ctx, markers, marker, compactEffectPending, compactEffectPendingTransient, err)
+		}
+		if err := writeCompactRepositoryContextMarker(ctx, markers, marker, compactEffectApplied, compactEffectPlatformLimited, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeCompactRepositoryContextMarker(ctx context.Context, repository compactEffectMarkerRepository, marker compactEffectMarker, state compactEffectMarkerState, observation compactEffectObservation, cause error) error {
+	marker.State, marker.Observation = state, observation
+	publication, err := repository.write(ctx, marker)
+	if err != nil {
+		return err
+	}
+	if cause != nil {
+		return cause
+	}
+	if publication.DurabilityLimited {
+		// refusal:by-design world-action: durable filesystem persistence must be restored before the marker can be promoted
+		return errors.New("repository context marker durability is limited")
+	}
+	return nil
+}
+
+func hashPayloadBytes(payload []byte) string {
+	return "sha256:" + identityHash(string(payload))
+}
