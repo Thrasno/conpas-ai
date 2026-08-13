@@ -75,7 +75,7 @@ func (repository compactEffectMarkerRepository) write(ctx context.Context, marke
 	payload, _ := json.Marshal(marker)
 	publication := compactEffectPublication{}
 	var publicationErr error
-	if err := writeAtomic(path, append(payload, '\n'), 0o600); err != nil {
+	if err := writePrivateRARAtomic(path, append(payload, '\n')); err != nil {
 		var syncErr *directorySyncError
 		if !errors.As(err, &syncErr) {
 			return publication, err
@@ -134,17 +134,30 @@ func (repository compactEffectMarkerRepository) path(lineageID, revision, eventI
 		if err := os.MkdirAll(base, 0o700); err != nil {
 			return "", err
 		}
-		for _, dir := range []string{filepath.Dir(repository.root), repository.root} {
-			if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+		markerRoot := filepath.Dir(repository.root)
+		created, err := createPrivateRARDirectory(markerRoot)
+		if err != nil {
+			return "", err
+		}
+		if created {
+			if err := SyncReviewDirectory(base); err != nil {
 				return "", err
 			}
-			info, err := os.Lstat(dir)
-			if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
-				return "", errors.New("unsafe compact effect marker root") // refusal:by-design world-action: private marker storage was substituted or made unsafe
-			}
-			if err := SyncReviewDirectory(filepath.Dir(dir)); err != nil {
+		}
+		if err := validatePrivateRARDirectory(markerRoot); err != nil {
+			return "", err
+		}
+		created, err = createPrivateRARDirectory(repository.root)
+		if err != nil {
+			return "", err
+		}
+		if created {
+			if err := SyncReviewDirectory(markerRoot); err != nil {
 				return "", err
 			}
+		}
+		if err := validatePrivateRARDirectory(repository.root); err != nil {
+			return "", err
 		}
 	}
 	dir := filepath.Join(repository.root, lineageID, revision[7:])
