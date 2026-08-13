@@ -134,19 +134,30 @@ func (repository compactEffectMarkerRepository) path(lineageID, revision, eventI
 		if err := os.MkdirAll(base, 0o700); err != nil {
 			return "", err
 		}
-		for _, dir := range []string{filepath.Dir(repository.root), repository.root} {
-			created, err := createPrivateRARDirectory(dir)
-			if err != nil {
+		markerRoot := filepath.Dir(repository.root)
+		created, err := createPrivateRARDirectory(markerRoot)
+		if err != nil {
+			return "", err
+		}
+		if created {
+			if err := SyncReviewDirectory(base); err != nil {
 				return "", err
 			}
-			if created {
-				if err := SyncReviewDirectory(filepath.Dir(dir)); err != nil {
-					return "", err
-				}
-			}
-			if err := validatePrivateRARDirectory(dir); err != nil {
+		}
+		if err := validatePrivateRARDirectory(markerRoot); err != nil {
+			return "", err
+		}
+		created, err = createPrivateRARDirectory(repository.root)
+		if err != nil {
+			return "", err
+		}
+		if created {
+			if err := SyncReviewDirectory(markerRoot); err != nil {
 				return "", err
 			}
+		}
+		if err := validatePrivateRARDirectory(repository.root); err != nil {
+			return "", err
 		}
 	}
 	dir := filepath.Join(repository.root, lineageID, revision[7:])

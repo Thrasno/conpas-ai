@@ -68,6 +68,12 @@ func TestCompactEffectMarkerIsPrivateSeparateAndStable(t *testing.T) {
 	if _, err := repository.write(context.Background(), marker); err != nil {
 		t.Fatal(err)
 	}
+	if err := validateRARRepositoryParent(sharedRoot); err != nil {
+		t.Fatalf("valid shared authority ancestor was rejected: %v", err)
+	}
+	if err := validatePrivateRARDirectory(filepath.Join(sharedRoot, "effect-markers")); err != nil {
+		t.Fatalf("marker subtree is not private: %v", err)
+	}
 	if err := validatePrivateRARDirectory(repository.root); err != nil {
 		t.Fatalf("marker root is not private: %v", err)
 	}
