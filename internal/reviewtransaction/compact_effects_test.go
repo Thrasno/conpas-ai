@@ -30,6 +30,7 @@ func TestCompactEffectMarkerStrictValidation(t *testing.T) {
 		{"wrong event", markerPayload(marker, func(value *compactEffectMarker) { value.EventID = hash("d") })},
 		{"invalid state", markerPayload(marker, func(value *compactEffectMarker) { value.State = "unknown" })},
 		{"invalid observation", markerPayload(marker, func(value *compactEffectMarker) { value.Observation = "unknown" })},
+		{"mismatched state and observation", markerPayload(marker, func(value *compactEffectMarker) { value.State = compactEffectApplied })},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {

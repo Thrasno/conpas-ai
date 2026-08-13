@@ -2278,8 +2278,7 @@ func makeCompactRecordWithIntents(state CompactState, intents []CompactEffectInt
 	}
 	bindingRevision := compactStateRevision(statePayload)
 	revision := bindingRevision
-	if len(intents) == 0 {
-	} else {
+	if len(intents) > 0 {
 		semantic := make([]struct {
 			Class       string `json:"class"`
 			Destination string `json:"destination"`

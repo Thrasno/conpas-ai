@@ -70,9 +70,10 @@ func (repository compactEffectMarkerRepository) read(lineageID, revision, eventI
 }
 
 func validateCompactEffectMarker(marker compactEffectMarker, lineageID, revision, eventID string) error {
-	validState := marker.State == compactEffectPending || marker.State == compactEffectBlocked || marker.State == compactEffectApplied
-	validObservation := marker.Observation == compactEffectPendingTransient || marker.Observation == compactEffectBlockedConflict || marker.Observation == compactEffectPlatformLimited
-	if marker.Schema != compactEffectMarkerSchema || marker.LineageID != lineageID || marker.AuthorityRevision != revision || marker.EventID != eventID || !validState || !validObservation {
+	validPair := marker.State == compactEffectPending && marker.Observation == compactEffectPendingTransient ||
+		marker.State == compactEffectBlocked && marker.Observation == compactEffectBlockedConflict ||
+		marker.State == compactEffectApplied && marker.Observation == compactEffectPlatformLimited
+	if marker.Schema != compactEffectMarkerSchema || marker.LineageID != lineageID || marker.AuthorityRevision != revision || marker.EventID != eventID || !validPair {
 		return errors.New("invalid compact effect marker") // refusal:by-design operator-knowledge: marker schema, binding, state, and observation are closed
 	}
 	return nil
