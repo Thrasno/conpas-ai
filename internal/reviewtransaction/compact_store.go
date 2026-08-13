@@ -17,7 +17,10 @@ import (
 	"time"
 )
 
-const compactRecordSchema = "gentle-ai.review-state-record/v2"
+const (
+	compactRecordSchema                 = "gentle-ai.review-state-record/v2"
+	CompactEffectClassRepositoryContext = "repository_context"
+)
 
 // Compact store entry artifact names. Every file the compact store writes
 // under a lineage directory must be named here so the reclaim authority
