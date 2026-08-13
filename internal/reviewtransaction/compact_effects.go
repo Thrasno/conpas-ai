@@ -135,14 +135,16 @@ func (repository compactEffectMarkerRepository) path(lineageID, revision, eventI
 			return "", err
 		}
 		for _, dir := range []string{filepath.Dir(repository.root), repository.root} {
-			if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+			created, err := createPrivateRARDirectory(dir)
+			if err != nil {
 				return "", err
 			}
-			info, err := os.Lstat(dir)
-			if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
-				return "", errors.New("unsafe compact effect marker root") // refusal:by-design world-action: private marker storage was substituted or made unsafe
+			if created {
+				if err := SyncReviewDirectory(filepath.Dir(dir)); err != nil {
+					return "", err
+				}
 			}
-			if err := SyncReviewDirectory(filepath.Dir(dir)); err != nil {
+			if err := validatePrivateRARDirectory(dir); err != nil {
 				return "", err
 			}
 		}

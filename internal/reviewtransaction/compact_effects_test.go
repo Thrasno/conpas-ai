@@ -55,6 +55,7 @@ func TestCompactEffectMarkerIsPrivateSeparateAndStable(t *testing.T) {
 	if err := os.MkdirAll(sharedRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = os.Chmod(sharedRoot, 0o700) })
 	authority := filepath.Join(sharedRoot, "v2", "authority.json")
 	if err := os.MkdirAll(filepath.Dir(authority), 0o700); err != nil {
 		t.Fatal(err)
@@ -66,6 +67,9 @@ func TestCompactEffectMarkerIsPrivateSeparateAndStable(t *testing.T) {
 	marker.State, marker.Observation = compactEffectApplied, compactEffectPlatformLimited
 	if _, err := repository.write(context.Background(), marker); err != nil {
 		t.Fatal(err)
+	}
+	if err := validatePrivateRARDirectory(repository.root); err != nil {
+		t.Fatalf("marker root is not private: %v", err)
 	}
 	path, _ := repository.path(marker.LineageID, marker.AuthorityRevision, marker.EventID, false)
 	before, _ := os.ReadFile(path)
