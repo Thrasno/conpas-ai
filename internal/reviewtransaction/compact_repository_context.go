@@ -34,7 +34,7 @@ func reconcileCompactRepositoryContext(ctx context.Context, store CompactStore, 
 			TargetIdentity: record.State.InitialSnapshot.Identity, Revision: intent.BindingRevision}
 		identity, err := reviewRepositoryIdentity(ctx, store.repo)
 		if err != nil {
-			return writeCompactRepositoryContextMarker(markers, marker, compactEffectPending, compactEffectPendingTransient, err)
+			return writeCompactRepositoryContextMarker(ctx, markers, marker, compactEffectPending, compactEffectPendingTransient, err)
 		}
 		handle := reviewRepositoryContextHandle(binding, identity)
 		contextRecord := reviewRepositoryContextFile{
@@ -48,7 +48,7 @@ func reconcileCompactRepositoryContext(ctx context.Context, store CompactStore, 
 			return err
 		}
 		if handle != intent.Destination || hashPayloadBytes(payload) != intent.PayloadHash {
-			return writeCompactRepositoryContextMarker(markers, marker, compactEffectBlocked, compactEffectBlockedConflict,
+			return writeCompactRepositoryContextMarker(ctx, markers, marker, compactEffectBlocked, compactEffectBlockedConflict,
 				errors.New("repository context effect binding or payload does not match committed intent"))
 		}
 		path, err := reviewRepositoryContextPath(handle)
@@ -67,18 +67,18 @@ func reconcileCompactRepositoryContext(ctx context.Context, store CompactStore, 
 			err = publishReviewRepositoryContext(path, append(payload, '\n'))
 		}
 		if err != nil {
-			return writeCompactRepositoryContextMarker(markers, marker, compactEffectPending, compactEffectPendingTransient, err)
+			return writeCompactRepositoryContextMarker(ctx, markers, marker, compactEffectPending, compactEffectPendingTransient, err)
 		}
-		if err := writeCompactRepositoryContextMarker(markers, marker, compactEffectApplied, compactEffectAppliedDurable, nil); err != nil {
+		if err := writeCompactRepositoryContextMarker(ctx, markers, marker, compactEffectApplied, compactEffectPlatformLimited, nil); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func writeCompactRepositoryContextMarker(repository compactEffectMarkerRepository, marker compactEffectMarker, state compactEffectMarkerState, observation compactEffectObservation, cause error) error {
+func writeCompactRepositoryContextMarker(ctx context.Context, repository compactEffectMarkerRepository, marker compactEffectMarker, state compactEffectMarkerState, observation compactEffectObservation, cause error) error {
 	marker.State, marker.Observation = state, observation
-	publication, err := repository.write(marker)
+	publication, err := repository.write(ctx, marker)
 	if err != nil {
 		return err
 	}
