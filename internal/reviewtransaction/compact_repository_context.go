@@ -11,9 +11,10 @@ import (
 type CompactRepositoryContextOutcome string
 
 const (
-	CompactRepositoryContextApplied CompactRepositoryContextOutcome = "applied"
-	CompactRepositoryContextPending CompactRepositoryContextOutcome = "pending"
-	CompactRepositoryContextBlocked CompactRepositoryContextOutcome = "blocked_conflict"
+	CompactRepositoryContextApplied           CompactRepositoryContextOutcome = "applied"
+	CompactRepositoryContextPending           CompactRepositoryContextOutcome = "pending"
+	CompactRepositoryContextBlocked           CompactRepositoryContextOutcome = "blocked_conflict"
+	CompactRepositoryContextDurabilityLimited CompactRepositoryContextOutcome = "durability_limited"
 )
 
 type CompactRepositoryContextResult struct {
