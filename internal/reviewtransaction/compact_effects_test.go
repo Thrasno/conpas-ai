@@ -267,6 +267,34 @@ func newCompactEffectMarkerFixture(t *testing.T, lineage string) (compactEffectM
 	return repository, compactEffectMarker{Schema: compactEffectMarkerSchema, LineageID: lineage, AuthorityRevision: hash("a"), EventID: hash("b"), State: compactEffectPending, Observation: compactEffectPendingTransient}
 }
 
+func TestCompactRepositoryContextIntentAndReconcilerContract(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := initSnapshotRepo(t)
+	state := newCompactTestState(t, repo, "repository-context-contract")
+	intent, err := compactRepositoryContextIntent(context.Background(), repo, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent.Class != CompactEffectClassRepositoryContext || intent.Destination == "" || !validSHA256(intent.PayloadHash) {
+		t.Fatalf("intent = %#v", intent)
+	}
+	record, payload, err := makeCompactRecordWithIntents(state, []CompactEffectIntent{intent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, _ := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err := writeAtomic(store.StatePath(), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := ReconcileCompactRepositoryContext(context.Background(), store, record)
+	if err != nil || result.Handle != intent.Destination || result.EventID != record.EffectIntents[0].EventID || result.Outcome != CompactRepositoryContextApplied {
+		t.Fatalf("result = %#v, %v", result, err)
+	}
+	if _, err := ReconcileCompactRepositoryContext(context.Background(), store, CompactRecord{State: state}); err == nil {
+		t.Fatal("record without repository context intent reconciled")
+	}
+}
+
 func markerPayload(marker compactEffectMarker, mutate func(*compactEffectMarker)) []byte {
 	mutate(&marker)
 	payload, _ := json.Marshal(marker)
