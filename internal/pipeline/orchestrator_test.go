@@ -61,6 +61,24 @@ func TestOrchestratorRollsBackApplyStepsOnFailure(t *testing.T) {
 	}
 }
 
+// TestOrchestratorRollbackCompensatesSuccessfulApply verifies that a
+// downstream failure can explicitly roll back an otherwise successful apply.
+func TestOrchestratorRollbackCompensatesSuccessfulApply(t *testing.T) {
+	order := []string{}
+	orchestrator := NewOrchestrator(DefaultRollbackPolicy())
+	result := orchestrator.Execute(StagePlan{Apply: []Step{newRollbackStep("apply-1", &order, nil)}})
+	if result.Err != nil {
+		t.Fatalf("Execute() error = %v", result.Err)
+	}
+
+	rollback := orchestrator.Rollback(result)
+	if !rollback.Success || !reflect.DeepEqual(order, []string{"run:apply-1", "rollback:apply-1"}) {
+		t.Fatalf("rollback = %#v, order = %v", rollback, order)
+	}
+}
+
+// TestOrchestratorSkipsRollbackWhenPolicyDisabled verifies that a disabled
+// policy leaves failed apply steps without compensation.
 func TestOrchestratorSkipsRollbackWhenPolicyDisabled(t *testing.T) {
 	order := []string{}
 	orchestrator := NewOrchestrator(RollbackPolicy{OnApplyFailure: false})
@@ -256,6 +274,20 @@ func TestOrchestratorContinueOnErrorWithRollback(t *testing.T) {
 	// Rollback should fire because apply failed and policy is enabled.
 	if result.Rollback.Stage != StageRollback {
 		t.Fatalf("rollback stage = %q, want rollback", result.Rollback.Stage)
+	}
+}
+
+func TestExecuteRollbackAttemptsEveryStepAfterFailures(t *testing.T) {
+	order := []string{}
+	first := &testStep{id: "first", order: &order}
+	failed := &testStep{id: "failed", order: &order, rollErr: errors.New("restore failed")}
+	last := &testStep{id: "last", order: &order}
+	result := ExecuteRollback([]StepResult{{StepID: "first", Status: StepStatusSucceeded}, {StepID: "failed", Status: StepStatusSucceeded}, {StepID: "last", Status: StepStatusSucceeded}}, map[string]Step{"first": first, "failed": failed, "last": last})
+	if result.Success || len(result.Steps) != 3 || result.Steps[1].Status != StepStatusFailed {
+		t.Fatalf("rollback = %#v, want all three results with failed middle step", result)
+	}
+	if !reflect.DeepEqual(order, []string{"rollback:last", "rollback:failed", "rollback:first"}) {
+		t.Fatalf("order = %v", order)
 	}
 }
 

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Thrasno/conpas-ai/internal/model"
-	"github.com/Thrasno/conpas-ai/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
 )
 
 func TestRenderDryRunIncludesPlatformDecision(t *testing.T) {

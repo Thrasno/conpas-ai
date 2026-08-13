@@ -6,8 +6,9 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/Thrasno/conpas-ai/internal/model"
-	"github.com/Thrasno/conpas-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 var LookPathOverride = exec.LookPath
@@ -60,16 +61,22 @@ func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, strin
 
 // --- Installation ---
 
-func (a *Adapter) SupportsAutoInstall() bool {
-	return true
+func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifest {
+	return capabilitymanifest.MustForAgent(model.AgentCodex)
 }
 
+// InstallCommand returns the display-only command shown when Codex is not
+// detected — gentle-ai never executes this (see agentInstallStep in
+// internal/cli/run.go). Codex CLI installs via npm on all platforms;
+// postinstall scripts are blocked to mitigate supply-chain risk. The version
+// advises "latest" rather than a pin: a human reads and runs this, and a
+// hardcoded version goes stale the moment a newer Codex ships.
 func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, error) {
-	// Codex CLI installs via npm on all platforms.
+	const pkg = "@openai/codex@latest"
 	if profile.OS == "linux" && !profile.NpmWritable {
-		return [][]string{{"sudo", "npm", "install", "-g", "@openai/codex"}}, nil
+		return [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}, nil
 	}
-	return [][]string{{"npm", "install", "-g", "@openai/codex"}}, nil
+	return [][]string{{"npm", "install", "-g", "--ignore-scripts", pkg}}, nil
 }
 
 // --- Config paths ---
@@ -83,7 +90,7 @@ func (a *Adapter) SystemPromptDir(homeDir string) string {
 }
 
 func (a *Adapter) SystemPromptFile(homeDir string) string {
-	return filepath.Join(homeDir, ".codex", "agents.md")
+	return filepath.Join(homeDir, ".codex", "AGENTS.md")
 }
 
 func (a *Adapter) SkillsDir(homeDir string) string {
@@ -116,7 +123,7 @@ func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
 // --- Optional capabilities ---
 
 func (a *Adapter) SupportsOutputStyles() bool {
-	return false
+	return a.CapabilityManifest().Features.OutputStyles
 }
 
 func (a *Adapter) OutputStyleDir(_ string) string {
@@ -124,24 +131,43 @@ func (a *Adapter) OutputStyleDir(_ string) string {
 }
 
 func (a *Adapter) SupportsSlashCommands() bool {
-	return false
+	return a.CapabilityManifest().Features.SlashCommands
 }
 
 func (a *Adapter) CommandsDir(_ string) string {
 	return ""
 }
 
+func (a *Adapter) SupportsSubAgents() bool {
+	return a.CapabilityManifest().Features.FileSubAgents
+}
+
+func (a *Adapter) SubAgentsDir(_ string) string {
+	return ""
+}
+
+func (a *Adapter) EmbeddedSubAgentsDir() string {
+	return ""
+}
+
 func (a *Adapter) SupportsSkills() bool {
-	return true
+	return a.CapabilityManifest().Features.Skills
 }
 
 func (a *Adapter) SupportsSystemPrompt() bool {
-	return true
+	return a.CapabilityManifest().Features.SystemPrompt
 }
 
 // SupportsMCP returns true — Codex supports MCP via ~/.codex/config.toml.
 func (a *Adapter) SupportsMCP() bool {
-	return true
+	return a.CapabilityManifest().Features.MCP
+}
+
+// RenderCodexPhaseEfforts implements codexModelResolver. It delegates to
+// model.RenderCodexPhaseEfforts so that inject.go can substitute the
+// {{CODEX_PHASE_EFFORTS}} placeholder in the Codex orchestrator asset.
+func (a *Adapter) RenderCodexPhaseEfforts(assignments map[string]model.CodexEffort, carrilModels map[string]string) string {
+	return model.RenderCodexPhaseEfforts(assignments, carrilModels)
 }
 
 func defaultStat(path string) statResult {

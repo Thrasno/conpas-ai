@@ -4,23 +4,38 @@
 
 ---
 
-This page explains how conpas-ai is meant to be used. Not the flags, not the architecture -- just the mental model. If you read one page besides the README, make it this one.
+This page explains how gentle-ai is meant to be used. Not the flags, not the architecture -- just the mental model. If you read one page besides the README, make it this one.
 
 ---
 
-## After Installing -- You're Done
+## After Installing -- You're Ready
 
-Once you run `conpas-ai` and select your agent(s), components, and preset, everything is configured. There is nothing else to do. No commands to memorize, no workflows to learn, no config files to edit.
+Once you run `gentle-ai` and select your agent(s), components, and preset, the ecosystem is configured for normal use. You do not need to memorize SDD phases, hand-edit generated config files, or manually wire the agent workflow.
 
-Open your AI agent and start working. That's it.
+Open your AI agent in a project and start working. For richer project context, the agent may run `/sdd-init` or refresh the skill registry automatically when SDD needs it. You can also run those manually, but they are not required for basic usage.
 
 ---
 
-## Engram (Memory) -- Don't Touch It
+## Engram (Memory) -- Automatic, But You CAN Use It
 
-Engram is persistent memory for your AI agent. It saves decisions, discoveries, bug fixes, and context across sessions -- automatically. The agent manages all of it.
+Engram is persistent memory for your AI agent. It saves decisions, discoveries, bug fixes, and context across sessions -- automatically. The agent manages all of it via MCP tools (`mem_save`, `mem_search`, etc.).
 
-You never need to configure it, inspect it, or interact with it directly. If engram is working correctly, you won't even notice it's there. That's the point.
+**Day-to-day: you don't need to do anything.** The agent handles memory automatically.
+
+**But engram has useful tools when you need them:**
+
+| Command                       | When to use                                                                                 |
+| ----------------------------- | ------------------------------------------------------------------------------------------- |
+| `engram tui`                  | Browse your memories visually -- search, filter, drill into observations                    |
+| `engram sync`                 | Export project memories to `.engram/` for git tracking. Run after significant work sessions |
+| `engram sync --import`        | Import memories on another machine after cloning a repo with `.engram/`                     |
+| `engram projects list`        | See all projects with observation counts                                                    |
+| `engram projects consolidate` | Fix project name drift (e.g., "my-app" vs "My-App" vs "my-app-frontend")                    |
+| `engram search <query>`       | Quick memory search from the terminal                                                       |
+
+Since v1.11.0, engram auto-detects the project name from git remote at startup, normalizes to lowercase, and warns if it finds similar existing project names. This prevents the name drift issue where the same project ends up with multiple name variants.
+
+For full documentation: [github.com/Gentleman-Programming/engram](https://github.com/Gentleman-Programming/engram)
 
 ---
 
@@ -36,20 +51,41 @@ Here's how it actually works:
 
 The agent handles all the phases internally. You just review and approve at key decision points.
 
+If you want the project-level OpenSpec config convention SDD phases use for conventions, strict TDD, and testing metadata, see [OpenSpec Config for SDD](openspec-config.md).
+
 ---
 
-## Multi-mode SDD -- OpenCode Only
+## Multi-mode SDD -- Use It When Your Agent Supports It
 
-Multi-mode lets you assign different AI models to different SDD phases -- for example, a powerful model for design and a faster one for implementation. This is an OpenCode-exclusive feature.
+Multi-mode lets you assign different AI models to different SDD phases -- for example, a powerful model for design and a faster one for implementation.
 
-For **all other agents** (Claude Code, Cursor, Gemini CLI, VS Code Copilot), SDD runs in single-mode automatically. One model handles everything, and that works perfectly fine.
+Support depends on the agent:
 
-If you want multi-mode in OpenCode:
+| Agent | How multi-mode works |
+| ----- | -------------------- |
+| **OpenCode** | SDD Profiles generate `gentle-orchestrator` plus phase sub-agents in `opencode.json` |
+| **Kilo Code** | OpenCode-compatible SDD profile overlay in `~/.config/kilo` |
+| **Kiro IDE** | Native phase agents with per-agent `model:` frontmatter |
+| **Pi** | Owned by `gentle-pi` through Pi-managed agents, chains, and model overrides |
+| **Others** | Single-mode SDD; one active model handles all phases |
+
+Single-mode is not a downgrade. It is the simpler default and works well. Multi-mode is useful when you deliberately want cost, speed, or reasoning tradeoffs per phase.
+
+If you want OpenCode profiles:
 
 1. Connect your AI providers in OpenCode first
-2. Run the conpas-ai installer and select "multi" when prompted
+2. Create a profile via gentle-ai TUI ("OpenCode SDD Profiles") or CLI (`--profile` flag)
+3. The base/default SDD conductor is `gentle-orchestrator`
+4. Named profiles generate `sdd-orchestrator-{name}` + suffixed sub-agents, each assigned to your chosen model
+5. In OpenCode, press **Tab** to switch between `gentle-orchestrator` and custom profiles
 
-If no providers are connected, you will only see single-mode as an option.
+You can create multiple profiles (e.g., "cheap" for experimentation, "premium" for production) and switch between them freely.
+
+If you prefer a **runtime profile manager** that keeps profiles outside `opencode.json`, gentle-ai supports that too. During sync, OpenCode can auto-detect external profile files under `~/.config/opencode/profiles/*.json` and switch to a safer compatibility path that preserves the active `gentle-orchestrator` prompt instead of overwriting it.
+
+**Full step-by-step guide**: [OpenCode SDD Profiles](opencode-profiles.md)
+
+For the complete support matrix, see [Supported Agents](agents.md).
 
 ---
 
@@ -59,27 +95,38 @@ When the orchestrator delegates work to a sub-agent (say, `sdd-explore` to inves
 
 What makes them "super sub-agents":
 
-1. **They discover skills on their own.** Each sub-agent's first action is to search for the skill registry -- via engram memory or the local `.atl/skill-registry.md` file. If it finds relevant skills (React patterns, Go testing, Angular architecture, etc.), it loads and follows them. The orchestrator doesn't need to spoon-feed skill paths.
+1. **The orchestrator keeps them focused.** The parent/orchestrator resolves the skill registry once, passes the relevant `SKILL.md` paths into each sub-agent prompt, and gives the child one concrete role. Sub-agents read exact skill files instead of receiving generated summaries.
 
-2. **They adapt to your project.** A `sdd-apply` sub-agent working on a React project will load React 19 patterns. The same sub-agent working on a Go project will load Go testing conventions. The skills it loads depend on what the registry says is relevant, not a hardcoded list.
+2. **They adapt to your project.** A `sdd-apply` sub-agent working on a React project receives React patterns. The same sub-agent working on a Go project receives Go testing conventions. The rules depend on the registry and task context, not a hardcoded list.
 
-3. **They persist their work.** Every sub-agent saves its artifacts to engram before returning. The next sub-agent in the pipeline can pick up exactly where the previous one left off, even across sessions.
+3. **They persist phase artifacts when the backend supports it.** In Engram-backed SDD flows, phase agents save artifacts before returning. The next phase can pick up from the stored proposal, spec, design, tasks, or apply progress -- even across sessions.
 
-This pattern works today on:
+This pattern works today in several delegation models:
 
-| Agent | How sub-agents run |
-|-------|-------------------|
-| **OpenCode** | Native sub-agent system — each phase is a dedicated agent with its own model, tools, and permissions defined in `opencode.json` |
-| **Claude Code** | Via the Agent tool — the orchestrator spawns sub-agents that self-discover skills from the registry |
-| **Others** | SDD runs inline (single session) — the model follows the orchestrator instructions without spawning separate agents |
+| Model | Agents | How it runs |
+| ----- | ------ | ----------- |
+| **Full sub-agents** | Claude Code, OpenCode, Kilo Code, Gemini CLI, Cursor, VS Code Copilot, Kimi Code, Kiro IDE, Qwen Code, Pi | Each SDD phase can run in a focused context through native delegation, package-managed subagents, or an OpenCode-compatible overlay |
+| **Hermes delegate_task** | Hermes | The orchestrator spawns ephemeral workers with self-contained missions and verifies their summaries before reporting success |
+| **Solo-agent** | Codex, Windsurf, Antigravity, OpenClaw, Trae | SDD phases run inline in one conversation; Engram still provides cross-phase persistence when available |
 
-You don't need to configure any of this. The installer sets it up, and the orchestrator manages delegation automatically.
+You don't need to configure any of this. The installer sets up the right model for your agent, and the orchestrator manages delegation automatically.
+
+### Delegation Stop Rules
+
+The orchestrator must stop acting as a monolithic executor when complexity appears:
+
+- **4-file rule**: reading 4+ files to understand a flow means delegate exploration or run an exploration phase.
+- **Multi-file write rule**: touching 2+ non-trivial files means use one writer or require fresh review before completion.
+- **PR rule**: before commit, push, or PR after code changes, run fresh review unless the diff is trivial (tier 1).
+- **Incident rule**: after wrong cwd, worktree/git accident, merge recovery, confusing test command, or environment workaround, run a fresh audit before continuing.
+- **Long-session rule**: after roughly 20 tool calls, 5 exploratory reads, or 2 non-mechanical edits with growing complexity, pause and delegate, re-plan, or justify why not.
+- **Fresh review rule**: use fresh context for adversarial review of diffs, conflicts, PR readiness, and incidents when the agent platform supports it.
 
 ---
 
 ## Skills -- Two Layers
 
-conpas-ai installs **SDD skills** and **foundation skills** (workflow, testing patterns) directly into your agent's skills directory. These are embedded in the binary and always up to date.
+gentle-ai installs **SDD skills** and **foundation skills** (workflow, testing patterns) directly into your agent's skills directory. These are embedded in the binary and always up to date.
 
 For **coding skills** (React 19, Angular, TypeScript, Tailwind, Zod, Playwright, etc.), the community maintains a separate repository: [Gentleman-Programming/Gentleman-Skills](https://github.com/Gentleman-Programming/Gentleman-Skills). You install those manually by cloning the repo and copying the skills you want:
 
@@ -96,13 +143,14 @@ Once installed, your agent detects what you're working on and loads the relevant
 
 How it works:
 
-1. **Run `/skill-registry` inside your project** -- it scans all your installed skills (user-level and project-level), reads their frontmatter, and builds a registry at `.atl/skill-registry.md`. If engram is available, it also saves the registry to memory for cross-session access.
-2. **The orchestrator uses it automatically** -- once the registry exists, the orchestrator reads it at session start and passes pre-resolved skill paths to sub-agents. You don't interact with the registry after that.
-3. **Re-run it when things change** -- any time you add, remove, or modify a skill, run `/skill-registry` again so the orchestrator picks up the changes.
+1. **The registry refreshes at startup where the agent supports hooks.** Normal Pi startup runs the `gentle-pi` session hook. Codex, Claude Code, and OpenCode run `gentle-ai skill-registry refresh --quiet` from their installed startup/plugin hooks.
+2. **The refresh is cached.** Gentle-AI fingerprints discovered `SKILL.md` files using schema version, path, mtime, and size. If `.atl/.skill-registry.cache.json` matches and `.atl/skill-registry.md` exists, startup is a cheap cache-hit.
+3. **The orchestrator uses it automatically** -- once the registry exists, the orchestrator reads it at session start and passes exact matching `SKILL.md` paths to sub-agents. You don't interact with the registry after that.
+4. **Manual fallback stays available** -- run `gentle-ai skill-registry refresh --force` from a project if you want to regenerate immediately.
 
 There's also an automated side: `sdd-init` runs the same registry logic internally, so if you use SDD in a new project, the registry gets built as part of that flow.
 
-**Pro tip**: If you find yourself updating skills often, you can create a skill (using `/skill-creator`) that automatically triggers a registry update after skill changes -- that way you never have to think about it.
+**Pro tip**: On Codex, Claude Code, OpenCode, and normal Pi startup you normally do not need to remember this. The startup hook refreshes the registry and the cache prevents unnecessary work. If you start Pi with `pi -ns`, Pi skips startup skill loading/hooks, so run the manual refresh when you need the registry updated in that session.
 
 ---
 
@@ -110,18 +158,18 @@ There's also an automated side: `sdd-init` runs the same registry logic internal
 
 Gentle AI is an ecosystem **configurator**. It sets up your AI agent with memory, skills, workflows, and a persona -- then gets out of the way.
 
-The less you think about conpas-ai after installing, the better it's working.
+The less you think about gentle-ai after installing, the better it's working.
 
 ---
 
 ## Quick Reference
 
-| Do | Don't |
-|----|-------|
-| Run the installer, pick your agents and preset | Manually edit the generated config files |
-| Just start coding with your AI agent | Memorize SDD phases or commands |
-| Let the agent suggest SDD when a task is big enough | Force SDD on every small task |
-| Trust that engram is saving context for you | Dig into engram's storage or try to manage it |
-| Run `/skill-registry` after installing or changing skills | Forget to update the registry after adding new skills |
-| Say "use sdd" if you know you want structured planning | Worry about which SDD phase comes next |
-| Re-run the installer to update or change your setup | Manually patch skill files or persona instructions |
+| Do                                                         | Don't                                                                             |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Run the installer, pick your agents and preset             | Manually edit the generated config files                                          |
+| Just start coding with your AI agent                       | Memorize SDD phases or commands                                                   |
+| Let the agent suggest SDD when a task is big enough        | Force SDD on every small task                                                     |
+| Trust that engram is saving context when installed and active | Dig into engram's storage unless you need `engram sync` or `engram tui`           |
+| Let startup hooks or SDD init refresh the skill registry      | Manually rescan skills unless you need `gentle-ai skill-registry refresh --force` |
+| Say "use sdd" if you know you want structured planning     | Worry about which SDD phase comes next                                            |
+| Re-run the installer to update or change your setup        | Manually patch skill files or persona instructions                                |

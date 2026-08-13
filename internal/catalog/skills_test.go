@@ -3,8 +3,8 @@ package catalog
 import (
 	"testing"
 
-	"github.com/Thrasno/conpas-ai/internal/components/skills"
-	"github.com/Thrasno/conpas-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 // TestMVPSkillsCoverAllPresetSkills ensures every skill that presets.go would
@@ -25,17 +25,6 @@ func TestMVPSkillsCoverAllPresetSkills(t *testing.T) {
 	}
 }
 
-// TestMVPSkillsContainsZohoDeluge verifies that zoho-deluge is registered
-// in the catalog's mvpSkills allowlist.
-func TestMVPSkillsContainsZohoDeluge(t *testing.T) {
-	for _, s := range MVPSkills() {
-		if s.ID == model.SkillZohoDeluge {
-			return
-		}
-	}
-	t.Fatal("zoho-deluge skill missing from catalog mvpSkills")
-}
-
 // TestMVPSkillsNoDuplicates ensures no skill is listed twice in mvpSkills.
 func TestMVPSkillsNoDuplicates(t *testing.T) {
 	seen := make(map[model.SkillID]bool)
@@ -44,5 +33,38 @@ func TestMVPSkillsNoDuplicates(t *testing.T) {
 			t.Errorf("duplicate skill %q in mvpSkills", s.ID)
 		}
 		seen[s.ID] = true
+	}
+}
+
+func TestMVPSkillsIncludeRequestedBundledSkillsWithCanonicalNames(t *testing.T) {
+	required := map[model.SkillID]string{
+		model.SkillCreator:             "skill-creator",
+		model.SkillSkillRegistry:       "skill-registry",
+		model.SkillCognitiveDoc:        "cognitive-doc-design",
+		model.SkillCommentWriter:       "comment-writer",
+		model.SkillJudgmentDay:         "judgment-day",
+		model.SkillSDDInit:             "sdd-init",
+		model.SkillImprover:            "skill-improver",
+		model.SkillRDDDefectWorkflow:   "rdd-defect-workflow",
+		model.SkillSystemicIssueTriage: "systemic-issue-triage",
+		model.SkillGentleAIBench:       "gentle-ai-bench",
+	}
+
+	found := make(map[model.SkillID]string)
+	for _, skill := range MVPSkills() {
+		found[skill.ID] = skill.Name
+		if skill.Name == "judgement-day" {
+			t.Fatalf("catalog uses non-canonical spelling %q; want judgment-day", skill.Name)
+		}
+	}
+
+	for id, wantName := range required {
+		name, ok := found[id]
+		if !ok {
+			t.Fatalf("MVPSkills() missing requested bundled skill %q", id)
+		}
+		if name != wantName {
+			t.Fatalf("MVPSkills() name for %q = %q, want %q", id, name, wantName)
+		}
 	}
 }

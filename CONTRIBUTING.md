@@ -13,6 +13,7 @@ Before you dive in, please read this guide fully. We have a structured workflow 
 - [Development Setup](#development-setup)
 - [Testing](#testing)
 - [Commit Convention](#commit-convention)
+- [Delivery Strategy for SDD Changes](#delivery-strategy-for-sdd-changes)
 - [Pull Request Rules](#pull-request-rules)
 - [Code of Conduct](#code-of-conduct)
 
@@ -33,6 +34,14 @@ PRs that are not linked to an approved issue will be **automatically rejected** 
 
 ---
 
+## Looking for something to work on?
+
+Start at the **[Community Roadmap](docs/community-roadmap.md)**.
+
+Everything labelled [`up-for-grabs`](https://github.com/Gentleman-Programming/gentle-ai/issues?q=is%3Aissue+is%3Aopen+label%3Aup-for-grabs) is scoped, carries `status:approved` so a PR can be opened, and is unclaimed. Comment that you are taking it and go.
+
+An issue **without** that label is usually waiting on information (`status:needs-info`) or on an architectural decision (`status:needs-design`). Those want discussion first — implementing before the decision lands means the work gets thrown away.
+
 ## Label System
 
 ### Type Labels (applied to PRs)
@@ -41,11 +50,16 @@ PRs that are not linked to an approved issue will be **automatically rejected** 
 |-------|-------------|
 | `type:bug` | Bug fix |
 | `type:feature` | New feature or enhancement |
-| `type:refactor` | Code refactoring, no functional changes |
 | `type:docs` | Documentation only |
-| `type:test` | Test coverage additions |
+| `type:refactor` | Code refactoring, no functional changes |
 | `type:chore` | Build, CI, tooling changes |
-| `type:breaking` | Breaking change |
+| `type:breaking-change` | Breaking change |
+
+### Size Labels (applied to PRs)
+
+| Label | Description |
+|-------|-------------|
+| `size:exception` | Maintainer-approved exception for PRs above the 400 changed-line review budget |
 
 ### Status Labels (applied to Issues)
 
@@ -72,9 +86,9 @@ PRs that are not linked to an approved issue will be **automatically rejected** 
 
 ### Prerequisites
 
-- Go 1.24+
+- Go 1.25.10+
 - Docker (for E2E tests)
-- Git
+- Git 2.38+
 
 ### Clone and Build
 
@@ -125,6 +139,46 @@ chmod +x docker-test.sh
 ```
 
 > ⚠️ E2E tests spin up containers to simulate real installation environments. They may take a few minutes to complete.
+
+### Benchmark Validation
+
+[`bench/`](bench/README.md) is a separate Go module, so root-module tests do not validate it. For benchmark-module changes, run these commands from `bench/`:
+
+```bash
+go build ./...
+go vet ./...
+go test ./...
+```
+
+The portable core includes `j52` through `j56` and `j58` under a normal product
+binary. `j57` is source-coupled, so build its tagged product binary from the
+repository root, then run it from `bench/`:
+
+```bash
+# From the repository root.
+go build -tags bench_fixture -o /path/to/gentle-ai ./cmd/gentle-ai
+
+# From bench/, after building gentle-ai-bench above.
+./gentle-ai-bench run --binary /path/to/gentle-ai --axis source-coupled --only j57-sdd-authority-drift-during-discovery-fails-closed
+```
+
+Benchmark validation applies to review-lifecycle, gate, recovery, delivery, benchmark implementation/corpus/classifier, and benchmark-claim changes. For measured product-behavior changes, use driven mode and report the command, tested binary or commit, selected subset or axes, and result summary. Compare before and after only when claiming a measured friction change. For unrelated changes, mark benchmark validation `N/A` with a brief reason.
+
+### Windows — Known Test Limitations
+
+Some unit tests require OS-level capabilities that are restricted on Windows by default.
+
+#### Symlink tests (`SeCreateSymbolicLinkPrivilege`)
+
+Tests that create symbolic links (e.g. in `internal/components/filemerge`) will be **skipped automatically** on Windows builds where the process lacks `SeCreateSymbolicLinkPrivilege` (`ERROR_PRIVILEGE_NOT_HELD`, errno 1314). This is a Windows security policy, not a bug in the code.
+
+To run these tests without restrictions, choose one of:
+
+- **Enable Developer Mode** — Settings → System → For developers → Developer Mode. This grants symlink creation to all processes without admin rights.
+- **Run as Administrator** — open your terminal as Administrator before running `go test ./...`.
+- **Grant the privilege explicitly** via Group Policy: `Local Security Policy → User Rights Assignment → Create symbolic links`.
+
+> On Linux and macOS these tests always run without any extra setup.
 
 ---
 
@@ -214,11 +268,52 @@ Branch names **must** match this pattern:
 
 ## Pull Request Rules
 
+### Delivery Strategy for SDD Changes
+
+Before `sdd-apply` starts, the SDD conductor checks the **Review Workload Forecast** from `sdd-tasks`. This protects reviewers from one giant, exhausting PR when the work should be split.
+
+| Strategy | Use when | What happens before apply |
+|---|---|---|
+| `ask-on-risk` | Default. You want the conductor to pause only when the forecast is risky. | If the forecast is high or above 400 changed lines, it asks whether to split or proceed with `size:exception`. |
+| `auto-chain` | You already know the change should be reviewed in slices. | The apply phase implements the next chained/stacked PR slice using work-unit commits. |
+| `single-pr` | The change is small or must land atomically. | If the forecast exceeds 400 changed lines, apply stops until a maintainer approves `size:exception`. |
+| `exception-ok` | A maintainer already accepted a large PR. | Apply continues and records that the PR has maintainer-approved `size:exception`. |
+
+**Decision checklist:**
+
+- [ ] Can one reviewer understand this in about 60 minutes?
+- [ ] Is the PR at or below 400 changed lines?
+- [ ] Does each work-unit commit include its code, tests, and docs together?
+- [ ] If the answer is “no” to any item, choose `auto-chain` or get explicit `size:exception` approval.
+
+**Mental model:** work-unit commits are the bricks; chained PRs are the wall sections. Don’t make reviewers inspect the whole building in one sitting.
+
+### PR Size Budget
+
+Keep PRs at or below **400 changed lines** (`additions + deletions`). This is a deliberate cognitive-load limit: a PR should be reviewable in roughly **60 minutes** without pushing reviewers into fatigue.
+
+If your change cannot fit that budget, split it into **chained or stacked PRs** so each review remains focused. Large generated/vendor/migration diffs may use the `size:exception` label, but only when a maintainer agrees the large diff is unavoidable.
+
+### Work-Unit Commits
+
+Structure commits by deliverable unit, not by file type. A good commit includes the code, tests, and docs needed to understand and verify one behavior or workflow.
+
+- Prefer `feat(auth): validate tokens at login` over separate `models`, `services`, and `tests` commits.
+- Keep rollback reasonable: reverting one commit should not remove unrelated work.
+- When a PR grows near 400 changed lines, promote work-unit commits into chained or stacked PRs.
+
+### Review Comments
+
+Review feedback should be warm, direct, and useful quickly. Start with the actionable point, explain why when needed, and avoid recapping the PR before giving feedback.
+
 ### Before Opening a PR
 
 - [ ] There is a linked approved issue (`Closes #<N>`)
+- [ ] The PR is at or below 400 changed lines, or a maintainer approved `size:exception`
+- [ ] Commits are organized by deliverable work unit
 - [ ] All unit tests pass (`go test ./...`)
 - [ ] E2E tests pass (`cd e2e && ./docker-test.sh`)
+- [ ] Benchmark validation completed, or this change is not applicable to the benchmark (explain why in the Test Plan).
 - [ ] Commits follow Conventional Commits format
 - [ ] Code is self-reviewed
 
@@ -237,6 +332,7 @@ All PRs go through automated checks:
 
 | Check | What It Verifies |
 |-------|-----------------|
+| **Check PR Cognitive Load** | PR stays within 400 changed lines (`additions + deletions`) unless labelled `size:exception` |
 | **Check Issue Reference** | PR body contains `Closes/Fixes/Resolves #N` |
 | **Check Issue Has status:approved** | The linked issue has been approved by a maintainer |
 | **Check PR Has type:* Label** | Exactly one `type:*` label is applied |

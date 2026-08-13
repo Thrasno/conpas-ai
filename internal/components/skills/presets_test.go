@@ -3,7 +3,7 @@ package skills
 import (
 	"testing"
 
-	"github.com/Thrasno/conpas-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 func TestSkillsForPresetMinimalReturnsSDDOnly(t *testing.T) {
@@ -70,26 +70,20 @@ func TestSkillsForPresetCustomReturnsNil(t *testing.T) {
 	}
 }
 
-// TestFoundationSkillsContainsZohoDeluge verifies zoho-deluge is part of
-// the ecosystem-only preset (i.e., in foundationSkills).
-func TestFoundationSkillsContainsZohoDeluge(t *testing.T) {
-	skills := SkillsForPreset(model.PresetEcosystemOnly)
-	for _, id := range skills {
-		if id == model.SkillZohoDeluge {
-			return
-		}
-	}
-	t.Fatal("zoho-deluge missing from ecosystem-only preset (not in foundationSkills)")
-}
-
 func TestAllSkillIDsIncludesEveryKnownSkill(t *testing.T) {
 	all := AllSkillIDs()
 
 	required := []model.SkillID{
 		model.SkillSDDInit,
-		model.SkillGoTesting,
 		model.SkillCreator,
+		model.SkillSkillRegistry,
+		model.SkillCognitiveDoc,
+		model.SkillCommentWriter,
 		model.SkillJudgmentDay,
+		model.SkillImprover,
+		model.SkillGoTesting,
+		model.SkillSystemicIssueTriage,
+		model.SkillGentleAIBench,
 	}
 
 	skillSet := make(map[model.SkillID]struct{}, len(all))
@@ -101,5 +95,35 @@ func TestAllSkillIDsIncludesEveryKnownSkill(t *testing.T) {
 		if _, ok := skillSet[req]; !ok {
 			t.Fatalf("AllSkillIDs() missing %q", req)
 		}
+	}
+}
+
+func TestRequestedBundledSkillsAreInPresetSkillSets(t *testing.T) {
+	required := []model.SkillID{
+		model.SkillCreator,
+		model.SkillSkillRegistry,
+		model.SkillCognitiveDoc,
+		model.SkillCommentWriter,
+		model.SkillJudgmentDay,
+		model.SkillSDDInit,
+		model.SkillImprover,
+		model.SkillRDDDefectWorkflow,
+		model.SkillSystemicIssueTriage,
+		model.SkillGentleAIBench,
+	}
+
+	for _, preset := range []model.PresetID{model.PresetEcosystemOnly, model.PresetFullGentleman} {
+		t.Run(string(preset), func(t *testing.T) {
+			skillSet := make(map[model.SkillID]struct{})
+			for _, skill := range SkillsForPreset(preset) {
+				skillSet[skill] = struct{}{}
+			}
+
+			for _, req := range required {
+				if _, ok := skillSet[req]; !ok {
+					t.Fatalf("SkillsForPreset(%q) missing requested bundled skill %q", preset, req)
+				}
+			}
+		})
 	}
 }

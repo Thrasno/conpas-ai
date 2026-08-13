@@ -3,8 +3,8 @@ package planner
 import (
 	"fmt"
 
-	"github.com/Thrasno/conpas-ai/internal/catalog"
-	"github.com/Thrasno/conpas-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 type dependencyResolver struct {

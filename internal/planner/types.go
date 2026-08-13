@@ -1,8 +1,8 @@
 package planner
 
 import (
-	"github.com/Thrasno/conpas-ai/internal/model"
-	"github.com/Thrasno/conpas-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 type Resolver interface {

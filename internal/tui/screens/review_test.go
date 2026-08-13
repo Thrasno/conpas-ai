@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Thrasno/conpas-ai/internal/model"
-	"github.com/Thrasno/conpas-ai/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
 )
 
 // ─── Issue #145: Review screen must show individual skills ───────────────────
@@ -125,5 +125,50 @@ func TestRenderReviewHidesStrictTDDWhenNoSDD(t *testing.T) {
 
 	if strings.Contains(out, "Strict TDD") {
 		t.Errorf("RenderReview should NOT show 'Strict TDD' when HasSDD=false; output:\n%s", out)
+	}
+}
+
+func TestRenderReviewClarifiesCustomPersonaAndPreset(t *testing.T) {
+	payload := planner.ReviewPayload{
+		Agents:  []model.AgentID{model.AgentClaudeCode},
+		Persona: model.PersonaCustom,
+		Preset:  model.PresetCustom,
+	}
+
+	out := RenderReview(payload, 0)
+
+	if !strings.Contains(out, "keep existing persona unmanaged") {
+		t.Fatalf("RenderReview missing custom persona clarification; output:\n%s", out)
+	}
+	if !strings.Contains(out, "choose components and skills manually") {
+		t.Fatalf("RenderReview missing custom preset clarification; output:\n%s", out)
+	}
+	if strings.Contains(out, "Persona  custom") {
+		t.Fatalf("RenderReview should not show raw custom persona label; output:\n%s", out)
+	}
+	if strings.Contains(out, "Preset  custom") {
+		t.Fatalf("RenderReview should not show raw custom preset label; output:\n%s", out)
+	}
+}
+
+func TestRenderReviewSummarizesPersonaConversationAndArtifacts(t *testing.T) {
+	tests := []struct {
+		name    string
+		persona model.PersonaID
+		want    string
+	}{
+		{name: "Gentleman", persona: model.PersonaGentleman, want: "Voseo conversation; English technical artifacts"},
+		{name: "Gentleman with English artifacts", persona: model.PersonaGentlemanNeutralArtifacts, want: "No regional conversation tone; English technical artifacts (legacy alias, remapped)"},
+		{name: "Neutral", persona: model.PersonaNeutral, want: "No regional conversation tone; English technical artifacts"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := planner.ReviewPayload{Persona: tt.persona}
+			out := RenderReview(payload, 0)
+			if !strings.Contains(out, tt.want) {
+				t.Fatalf("RenderReview() missing %q; output:\n%s", tt.want, out)
+			}
+		})
 	}
 }

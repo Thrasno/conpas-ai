@@ -11,9 +11,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Thrasno/conpas-ai/internal/agents/opencode"
-	"github.com/Thrasno/conpas-ai/internal/model"
-	"github.com/Thrasno/conpas-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kimi"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 // missingBinaryLookPath simulates all installable binaries (engram, gga) as
@@ -21,6 +27,33 @@ import (
 // (pre-built binaries are downloaded directly from GitHub Releases).
 func missingBinaryLookPath(name string) (string, error) {
 	return "", exec.ErrNotFound
+}
+
+func assertFileContains(t *testing.T, path string, want string) {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	if !strings.Contains(string(body), want) {
+		t.Fatalf("file %q missing %q; got:\n%s", path, want, string(body))
+	}
+}
+
+func stringSliceContains(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
+func engramInitCommandForTest() string {
+	if _, err := exec.LookPath("pnpm"); err == nil {
+		return "pnpm dlx gentle-engram@latest pi-engram init"
+	}
+	return "npm exec --yes --package gentle-engram@latest -- pi-engram init"
 }
 
 func TestRunInstallAppliesFilesystemChanges(t *testing.T) {
@@ -50,6 +83,289 @@ func TestRunInstallAppliesFilesystemChanges(t *testing.T) {
 	configPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	if _, err := os.Stat(configPath); err != nil {
 		t.Fatalf("expected config file %q: %v", configPath, err)
+	}
+}
+
+// TestRunInstallReturnsStatePersistenceFailure verifies that a failed state
+// commit restores the managed asset bytes and preserves the previous state.
+func TestRunInstallReturnsStatePersistenceFailure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = missingBinaryLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	if err := state.Write(home, state.InstallState{}); err != nil {
+		t.Fatal(err)
+	}
+	originalState, err := os.ReadFile(state.Path(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if _, err := os.ReadFile(configPath); !os.IsNotExist(err) {
+		t.Fatalf("pre-install config read error = %v, want absent", err)
+	}
+	statePath := state.Path(home)
+	target := filepath.Join(home, ".gentle-ai", "persisted-state.json")
+	if err := os.Rename(statePath, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, statePath); err != nil {
+		t.Skipf("state symlink unavailable: %v", err)
+	}
+
+	_, err = RunInstall([]string{"--agent", "opencode", "--component", "permissions"}, system.DetectionResult{})
+	if err == nil || !strings.Contains(err.Error(), "persist install state") {
+		t.Fatalf("RunInstall() error = %v, want state persistence failure", err)
+	}
+	if _, readErr := os.ReadFile(configPath); !os.IsNotExist(readErr) {
+		t.Fatalf("config after failed install read error = %v, want absent", readErr)
+	}
+	finalState, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(finalState) != string(originalState) {
+		t.Fatalf("state after failed install changed:\n got %s\nwant %s", finalState, originalState)
+	}
+}
+
+func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = func(name string) (string, error) {
+		return filepath.Join(home, "bin", name), nil
+	}
+	restorePreflightLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
+		return filepath.Join(home, "bin", name), nil
+	})
+	t.Cleanup(restorePreflightLookPath)
+
+	var commands []string
+	runCommand = func(name string, args ...string) error {
+		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+		// Simulate pi-engram init writing mcp.json with the new schema.
+		isNpmEngramInit := name == "npm" && len(args) >= 7 && args[5] == "pi-engram" && args[6] == "init"
+		isPnpmEngramInit := name == "pnpm" && len(args) >= 4 && args[2] == "pi-engram" && args[3] == "init"
+		if isNpmEngramInit || isPnpmEngramInit {
+			mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")
+			if err := os.MkdirAll(filepath.Dir(mcpPath), 0o755); err != nil {
+				return err
+			}
+			if err := os.WriteFile(mcpPath, []byte(`{"activeMCP":"engram","mcpServers":{"engram":{"command":"node","args":["--eval","require('child_process').spawn('engram',['mcp','--tools=agent'],{stdio:'inherit'})"]}}}`+"\n"), 0o644); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	result, err := RunInstall([]string{
+		"--agent", "pi",
+		"--agent", "opencode",
+		"--component", "engram",
+	}, system.DetectionResult{})
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+	if !result.Verify.Ready {
+		t.Fatalf("verification ready = false, report = %#v", result.Verify)
+	}
+
+	assertFileContains(t, filepath.Join(home, ".pi", "agent", "settings.json"), "npm:pi-mcp-adapter")
+	assertFileContains(t, filepath.Join(home, ".pi", "npm", "package.json"), "pi-mcp-adapter")
+	assertFileContains(t, filepath.Join(home, ".config", "opencode", "opencode.json"), "engram")
+
+	if !stringSliceContains(commands, "pi install npm:pi-mcp-adapter") {
+		t.Fatalf("commands missing %q; got %v", "pi install npm:pi-mcp-adapter", commands)
+	}
+	if !stringSliceContains(commands, "npm exec --yes --package gentle-engram@latest -- pi-engram init") &&
+		!stringSliceContains(commands, "pnpm dlx gentle-engram@latest pi-engram init") {
+		t.Fatalf("commands missing Engram init command; got %v", commands)
+	}
+}
+
+// TestAgentInstallStepRefusesMissingCodexInsteadOfInstalling proves that when
+// Codex is not detected, gentle-ai never runs an install command on the
+// user's behalf: it refuses and names the exact command the user would need
+// to run themselves. Before this behavior existed, this same scenario
+// (Codex undetected) executed `npm install -g --ignore-scripts
+// @openai/codex@0.144.0` via runCommand — see git history for the prior
+// version of this test, TestRunInstallInstallsMissingCodexBeforeRuntimeValidationAndProfileWrite.
+func TestAgentInstallStepRefusesMissingCodexInsteadOfInstalling(t *testing.T) {
+	home := t.TempDir()
+	codexInstallCalls := 0
+	validationCalls := 0
+
+	restoreCodexLookPath := codex.LookPathOverride
+	codex.LookPathOverride = func(string) (string, error) { return "", exec.ErrNotFound }
+	t.Cleanup(func() { codex.LookPathOverride = restoreCodexLookPath })
+
+	restoreVersionProbe := codex.SetRuntimeVersionProbeForTest(func() ([]byte, error) {
+		validationCalls++
+		return nil, exec.ErrNotFound
+	})
+	t.Cleanup(restoreVersionProbe)
+
+	restorePreflightLookPath := installcmd.OverrideLookPath(func(string) (string, error) { return "npm", nil })
+	t.Cleanup(restorePreflightLookPath)
+
+	restoreLookPath := cmdLookPath
+	cmdLookPath = func(name string) (string, error) {
+		if name == "engram" {
+			return filepath.Join(home, "bin", "engram"), nil
+		}
+		return "", exec.ErrNotFound
+	}
+	t.Cleanup(func() { cmdLookPath = restoreLookPath })
+
+	restoreDownload := engramDownloadFn
+	engramDownloadFn = func(system.PlatformProfile) (string, error) {
+		t.Fatal("engramDownloadFn must not use the network in this test")
+		return "", nil
+	}
+	t.Cleanup(func() { engramDownloadFn = restoreDownload })
+
+	restoreCommand := runCommand
+	runCommand = func(name string, args ...string) error {
+		codexInstallCalls++
+		return fmt.Errorf("gentle-ai must never execute a command on the user's behalf, got: %s %s", name, strings.Join(args, " "))
+	}
+	t.Cleanup(func() { runCommand = restoreCommand })
+
+	runtime := installRuntime{
+		homeDir: home,
+		resolved: planner.ResolvedPlan{
+			Agents: []model.AgentID{model.AgentCodex}, OrderedComponents: []model.ComponentID{model.ComponentEngram},
+		},
+		profile: system.PlatformProfile{OS: "linux", NpmWritable: true},
+	}
+
+	var refusal error
+	for _, step := range runtime.stagePlan().Apply {
+		if err := step.Run(); err != nil {
+			refusal = err
+			break
+		}
+	}
+
+	if refusal == nil {
+		t.Fatal("agentInstallStep refusal error = nil, want a refusal because Codex is not installed")
+	}
+	const wantCommand = "npm install -g --ignore-scripts @openai/codex@latest"
+	if !strings.Contains(refusal.Error(), wantCommand) {
+		t.Fatalf("refusal error = %q, want it to name %q", refusal.Error(), wantCommand)
+	}
+	if codexInstallCalls != 0 {
+		t.Fatalf("Codex install calls = %d, want 0 — gentle-ai must never run an install command on the user's behalf", codexInstallCalls)
+	}
+	if validationCalls != 0 {
+		t.Fatalf("Codex runtime validation calls = %d, want 0 — the pipeline must stop at the refusal, never proceed past a missing runtime", validationCalls)
+	}
+}
+
+func TestPiAgentInstallRunsPackageCommandsWhenPiAlreadyInstalled(t *testing.T) {
+	binDir := t.TempDir()
+	fakePi := filepath.Join(binDir, "pi")
+	if err := os.WriteFile(fakePi, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(fake pi) error = %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	fakeNpm := filepath.Join(binDir, "npm")
+	if err := os.WriteFile(fakeNpm, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(fake npm) error = %v", err)
+	}
+
+	restorePreflightLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
+		switch name {
+		case "pi":
+			return fakePi, nil
+		case "npm":
+			// Pi's install runs npm exec for engram init, so npm must be present.
+			return fakeNpm, nil
+		default:
+			return "", exec.ErrNotFound
+		}
+	})
+	t.Cleanup(restorePreflightLookPath)
+
+	restoreCommand := runCommand
+	t.Cleanup(func() { runCommand = restoreCommand })
+
+	var commands []string
+	runCommand = func(name string, args ...string) error {
+		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+		return nil
+	}
+
+	step := agentInstallStep{
+		id:      "agent:pi",
+		agent:   model.AgentPi,
+		homeDir: t.TempDir(),
+	}
+
+	if err := step.Run(); err != nil {
+		t.Fatalf("agentInstallStep.Run() error = %v", err)
+	}
+
+	for _, want := range []string{
+		"pi install npm:gentle-pi",
+		"pi install npm:gentle-engram",
+		"pi install npm:pi-mcp-adapter",
+		engramInitCommandForTest(),
+		"pi install npm:pi-subagents-j0k3r",
+		"pi install npm:@juicesharp/rpiv-ask-user-question",
+		"pi install npm:pi-web-access",
+		"pi install npm:@juicesharp/rpiv-todo",
+		"pi install npm:pi-btw",
+	} {
+		if !stringSliceContains(commands, want) {
+			t.Fatalf("commands missing %q; got %v", want, commands)
+		}
+	}
+}
+
+// TestAgentInstallStepReportsUndetectedClassBAgentInsteadOfSilentNoop proves
+// that an agent with no AutoInstall claim (a desktop app or vendor-managed
+// tool gentle-ai has never been able to install) now reports when it is not
+// detected, instead of silently no-opping and letting the pipeline proceed
+// to write config for a tool that may not exist. Cursor's own
+// AgentNotInstallableError string is the refusal — it already existed and
+// was already unit-tested at the adapter level, but was unreachable from
+// this pipeline step before this behavior existed.
+func TestAgentInstallStepReportsUndetectedClassBAgentInsteadOfSilentNoop(t *testing.T) {
+	step := agentInstallStep{
+		id:      "agent:cursor",
+		agent:   model.AgentCursor,
+		homeDir: t.TempDir(),
+	}
+
+	err := step.Run()
+	if err == nil {
+		t.Fatal("agentInstallStep.Run() error = nil, want a report because Cursor is not installed")
+	}
+	const want = "agent cursor is a desktop app and cannot be installed via CLI"
+	if err.Error() != want {
+		t.Fatalf("agentInstallStep.Run() error = %q, want %q", err.Error(), want)
 	}
 }
 
@@ -83,8 +399,12 @@ func TestRunInstallRollsBackOnComponentFailure(t *testing.T) {
 		return nil
 	}
 
+	// Use only engram (not context7) — context7 injects MCP config into
+	// the settings file and does not have a rollback step, so including it
+	// makes the before/after comparison fail even when the pipeline rollback
+	// works correctly. Context7 rollback is tracked separately.
 	_, err := RunInstall(
-		[]string{"--agent", "opencode", "--component", "context7", "--component", "engram"},
+		[]string{"--agent", "opencode", "--component", "engram"},
 		system.DetectionResult{},
 	)
 	if err == nil {
@@ -338,8 +658,9 @@ func TestRunInstallLinuxRollsBackOnComponentFailure(t *testing.T) {
 	t.Cleanup(func() { engramDownloadFn = origDownloadFn })
 
 	detection := linuxDetectionResult(system.LinuxDistroUbuntu, "apt")
+	// Exclude context7 — it has no rollback and taints the settings file.
 	_, err := RunInstall(
-		[]string{"--agent", "opencode", "--component", "context7", "--component", "engram"},
+		[]string{"--agent", "opencode", "--component", "engram"},
 		detection,
 	)
 	if err == nil {
@@ -361,7 +682,68 @@ func TestRunInstallLinuxRollsBackOnComponentFailure(t *testing.T) {
 	}
 }
 
-func TestRunInstallLinuxAgentInstallResolvesGoInstallCommand(t *testing.T) {
+// TestRunInstallWorkspaceScopeRollback_SurfacesRealError reproduces issue #2451:
+// a workspace-scoped install (--scope workspace) legitimately writes files whose
+// OriginalPath resolves outside the user home directory. When the backup snapshot
+// captures such a path (Existed:false, since it does not exist yet) and a LATER
+// apply step fails, rollback fires and must restore/remove that workspace-scoped
+// entry — not refuse it and mask the real download failure with a validation
+// error claiming the path must be "under the user home directory".
+func TestRunInstallWorkspaceScopeRollback_SurfacesRealError(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	originalCwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get current working directory: %v", err)
+	}
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+		if err := os.Chdir(originalCwd); err != nil {
+			t.Errorf("failed to restore working directory: %v", err)
+		}
+	})
+	cmdLookPath = missingBinaryLookPath
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(name string, args ...string) error { return nil }
+
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("failed to change working directory to temp workspace: %v", err)
+	}
+
+	// Fail the engram download AFTER the backup snapshot has already captured
+	// the not-yet-existing workspace-scoped engram MCP config path (Existed:false),
+	// so the pipeline's apply stage fails and rollback fires against that entry.
+	origDownloadFn := engramDownloadFn
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		return "", os.ErrPermission
+	}
+	t.Cleanup(func() { engramDownloadFn = origDownloadFn })
+
+	detection := linuxDetectionResult(system.LinuxDistroUbuntu, "apt")
+	_, err = RunInstall(
+		[]string{"--scope", "workspace", "--agent", "opencode", "--component", "engram"},
+		detection,
+	)
+	if err == nil {
+		t.Fatalf("RunInstall() expected error")
+	}
+
+	if strings.Contains(err.Error(), "user home directory") {
+		t.Fatalf("rollback masked the real download error with a home-directory validation refusal: %v", err)
+	}
+	if !strings.Contains(err.Error(), "permission") {
+		t.Fatalf("RunInstall() error = %v, want it to surface the real download failure (os.ErrPermission)", err)
+	}
+}
+
+func TestRunInstallFedoraQwenEngramSkipsUnsupportedSetupAndWritesSettings(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -377,6 +759,69 @@ func TestRunInstallLinuxAgentInstallResolvesGoInstallCommand(t *testing.T) {
 	recorder := &commandRecorder{}
 	runCommand = recorder.record
 
+	origDownloadFn := engramDownloadFn
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		return filepath.Join(home, "bin", "engram"), nil
+	}
+	t.Cleanup(func() { engramDownloadFn = origDownloadFn })
+
+	detection := linuxDetectionResult(system.LinuxDistroFedora, "dnf")
+	result, err := RunInstall(
+		[]string{"--agent", "qwen-code", "--component", "engram"},
+		detection,
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+	if !result.Verify.Ready {
+		t.Fatalf("verification ready = false, report = %#v", result.Verify)
+	}
+
+	settingsPath := filepath.Join(home, ".qwen", "settings.json")
+	if _, err := os.Stat(settingsPath); err != nil {
+		t.Fatalf("expected qwen settings at %q: %v", settingsPath, err)
+	}
+
+	for _, cmd := range recorder.get() {
+		if strings.Contains(cmd, "engram setup qwen-code") {
+			t.Fatalf("unexpected unsupported setup command: %s", cmd)
+		}
+	}
+}
+
+// TestRunInstallRefusesMissingOpenCodeInsteadOfInstalling proves that when
+// OpenCode is not detected, gentle-ai never runs an install command on the
+// user's behalf: RunInstall fails with a refusal naming the exact command
+// the user would need to run themselves. Before this behavior existed, this
+// same scenario (OpenCode undetected on Ubuntu) executed `sudo npm install
+// -g --ignore-scripts opencode-ai@<pin>` via runCommand — see git history
+// for the prior version of this test,
+// TestRunInstallLinuxAgentInstallResolvesGoInstallCommand.
+func TestRunInstallRefusesMissingOpenCodeInsteadOfInstalling(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = missingBinaryLookPath
+	recorder := &commandRecorder{}
+	runCommand = recorder.record
+
+	// The refusal makes the Apply stage fail, which triggers the pipeline's
+	// rollback of the pre-install snapshot. Rollback validates every restored
+	// path is under the real user home directory, so it must be told this
+	// test's fake home — otherwise the rollback itself fails first and its
+	// error masks the refusal this test is asserting on.
+	restoreBackupHome := backup.UserHomeDirFn
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	t.Cleanup(func() { backup.UserHomeDirFn = restoreBackupHome })
+
 	// Set the agent adapter's lookPath to simulate missing opencode
 	opencodeAdapterLookPath := opencode.LookPathOverride
 	opencode.LookPathOverride = missingBinaryLookPath
@@ -389,21 +834,22 @@ func TestRunInstallLinuxAgentInstallResolvesGoInstallCommand(t *testing.T) {
 		[]string{"--agent", "opencode", "--component", "permissions"},
 		detection,
 	)
-	if err != nil {
-		t.Fatalf("RunInstall() error = %v", err)
+	if err == nil {
+		t.Fatal("RunInstall() error = nil, want a refusal because opencode is not installed")
 	}
 
-	// OpenCode on Ubuntu should resolve via npm install (official method from opencode.ai).
-	commands := recorder.get()
-	foundNpmInstall := false
-	for _, cmd := range commands {
-		if strings.Contains(cmd, "sudo npm install -g opencode-ai") {
-			foundNpmInstall = true
-			break
-		}
+	// OpenCode on Ubuntu resolves via npm install (official method from
+	// opencode.ai) — the refusal must name that exact command, never run it.
+	// This is deliberately "latest", not versions.OpenCode: that constant is
+	// the CI/E2E-owned pin for the binary actually installed in those tests,
+	// unrelated to this display-only advice string.
+	wantCommand := "sudo npm install -g --ignore-scripts opencode-ai@latest"
+	if !strings.Contains(err.Error(), wantCommand) {
+		t.Fatalf("RunInstall() error = %q, want it to name %q", err.Error(), wantCommand)
 	}
-	if !foundNpmInstall {
-		t.Fatalf("expected npm install command for opencode agent, got commands: %v", commands)
+
+	if commands := recorder.get(); len(commands) != 0 {
+		t.Fatalf("commands executed = %v, want none — gentle-ai must never run an install command on the user's behalf", commands)
 	}
 }
 
@@ -642,8 +1088,9 @@ func TestRunInstallMacOSRollbackStillWorks(t *testing.T) {
 	}
 
 	detection := macOSDetectionResult()
+	// Exclude context7 — it has no rollback and taints the settings file.
 	_, err := RunInstall(
-		[]string{"--agent", "opencode", "--component", "context7", "--component", "engram"},
+		[]string{"--agent", "opencode", "--component", "engram"},
 		detection,
 	)
 	if err == nil {
@@ -794,11 +1241,15 @@ func TestRunInstallEngramSetupStrictFailsWhenSetupFails(t *testing.T) {
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
+	origUserHomeDirFn := backup.UserHomeDirFn
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
+		backup.UserHomeDirFn = origUserHomeDirFn
 	})
+	// Override restore path validation to accept test temp dirs.
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
 
 	osUserHomeDir = func() (string, error) { return home, nil }
 	cmdLookPath = func(name string) (string, error) {
@@ -862,6 +1313,122 @@ func TestRunInstallEngramDefaultModeAttemptsClaudeSetup(t *testing.T) {
 	}
 	if !foundSetup {
 		t.Fatalf("expected default setup mode to attempt claude-code setup, got commands: %v", commands)
+	}
+}
+
+func TestRunInstallAntigravityInitializesCLISettingsAfterEngramSetup(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = func(name string) (string, error) {
+		return "/usr/local/bin/" + name, nil
+	}
+	runCommand = func(name string, args ...string) error {
+		if name == "engram" && len(args) == 2 && args[0] == "setup" && args[1] == "gemini-cli" {
+			settingsPath := filepath.Join(home, ".gemini", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(settingsPath, []byte("{\"theme\":\"dark\"}\n"), 0o644)
+		}
+		return nil
+	}
+
+	// This test targets antigravity settings initialization after engram
+	// setup, not agent install behavior, so simulate Antigravity as already
+	// installed (its Detect looks for ~/.gemini/antigravity) — otherwise
+	// gentle-ai correctly refuses to proceed for an undetected agent.
+	if err := os.MkdirAll(filepath.Join(home, ".gemini", "antigravity"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.gemini/antigravity): %v", err)
+	}
+
+	result, err := RunInstall(
+		[]string{"--agent", "antigravity", "--component", "engram", "--component", "context7", "--component", "permissions"},
+		macOSDetectionResult(),
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+	if !result.Verify.Ready {
+		t.Fatalf("verification ready = false")
+	}
+
+	settingsPath := filepath.Join(home, ".gemini", "antigravity-cli", "settings.json")
+	got, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", settingsPath, err)
+	}
+	if string(got) != "{}\n" {
+		t.Fatalf("antigravity settings = %q, want initialized empty settings", got)
+	}
+}
+
+func TestRunInstallDeduplicatesSharedEngramSetupSlugs(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = func(name string) (string, error) {
+		return "/usr/local/bin/" + name, nil
+	}
+
+	recorder := &commandRecorder{}
+	runCommand = func(name string, args ...string) error {
+		if err := recorder.record(name, args...); err != nil {
+			return err
+		}
+		if name == "engram" && len(args) == 2 && args[0] == "setup" && args[1] == "gemini-cli" {
+			settingsPath := filepath.Join(home, ".gemini", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(settingsPath, []byte("{\"theme\":\"dark\"}\n"), 0o644)
+		}
+		return nil
+	}
+
+	// This test targets shared-slug engram setup dedup, not agent install
+	// behavior, so simulate Antigravity as already installed (its Detect
+	// looks for ~/.gemini/antigravity) — otherwise gentle-ai correctly
+	// refuses to proceed for an undetected agent.
+	if err := os.MkdirAll(filepath.Join(home, ".gemini", "antigravity"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.gemini/antigravity): %v", err)
+	}
+
+	result, err := RunInstall(
+		[]string{"--agent", "gemini-cli", "--agent", "antigravity", "--component", "engram", "--component", "context7", "--component", "permissions"},
+		macOSDetectionResult(),
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+	if !result.Verify.Ready {
+		t.Fatalf("verification ready = false")
+	}
+
+	var setupCount int
+	for _, cmd := range recorder.get() {
+		if strings.Contains(cmd, "engram setup gemini-cli") {
+			setupCount++
+		}
+	}
+	if setupCount != 1 {
+		t.Fatalf("engram setup gemini-cli count = %d, want 1", setupCount)
 	}
 }
 
@@ -952,7 +1519,9 @@ func TestRunInstallGGALinuxIncludesTempCleanupBeforeClone(t *testing.T) {
 		if strings.Contains(cmd, "rm -rf /tmp/gentleman-guardian-angel") {
 			cleanupIdx = i
 		}
-		if strings.Contains(cmd, "git clone https://github.com/Gentleman-Programming/gentleman-guardian-angel.git /tmp/gentleman-guardian-angel") {
+		// Match the clone intent (URL + dest) instead of the full literal command,
+		// so the test stays valid when extra flags like --depth/--branch are added.
+		if strings.Contains(cmd, "git") && strings.Contains(cmd, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git") && strings.Contains(cmd, "/tmp/gentleman-guardian-angel") {
 			cloneIdx = i
 		}
 	}
@@ -1218,9 +1787,15 @@ func TestRunInstallDryRunMatchesActualInstallOpenCodeSDDMulti(t *testing.T) {
 	for _, component := range dryResult.Resolved.OrderedComponents {
 		expectedPaths = append(expectedPaths, componentPaths(home, dryResult.Selection, adapters, component)...)
 	}
-	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts")
-	if !containsPath(expectedPaths, pluginPath) {
-		t.Fatalf("dry-run expected paths missing multi-mode plugin %q\npaths=%v", pluginPath, expectedPaths)
+	pluginPaths := []string{
+		filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts"),
+		filepath.Join(home, ".config", "opencode", "plugins", "model-variants.ts"),
+		filepath.Join(home, ".config", "opencode", "plugins", "skill-registry.ts"),
+	}
+	for _, pluginPath := range pluginPaths {
+		if !containsPath(expectedPaths, pluginPath) {
+			t.Fatalf("dry-run expected paths missing multi-mode plugin %q\npaths=%v", pluginPath, expectedPaths)
+		}
 	}
 
 	restoreHome := osUserHomeDir
@@ -1245,8 +1820,25 @@ func TestRunInstallDryRunMatchesActualInstallOpenCodeSDDMulti(t *testing.T) {
 	}
 
 	for _, path := range expectedPaths {
+		if isLegacyOpenCodeBackgroundAgentsPlugin(path) {
+			if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+				t.Fatalf("expected legacy OpenCode SDD plugin %q to be removed after install; stat err = %v", path, statErr)
+			}
+			continue
+		}
 		if _, statErr := os.Stat(path); statErr != nil {
 			t.Fatalf("expected dry-run path %q to exist after install: %v", path, statErr)
+		}
+	}
+	for _, pluginPath := range pluginPaths {
+		if isLegacyOpenCodeBackgroundAgentsPlugin(pluginPath) {
+			if _, statErr := os.Stat(pluginPath); !os.IsNotExist(statErr) {
+				t.Fatalf("expected legacy OpenCode SDD plugin %q to be removed after install; stat err = %v", pluginPath, statErr)
+			}
+			continue
+		}
+		if _, statErr := os.Stat(pluginPath); statErr != nil {
+			t.Fatalf("expected OpenCode SDD plugin %q to exist after install: %v", pluginPath, statErr)
 		}
 	}
 }
@@ -1349,7 +1941,7 @@ func TestRunInstallUpgradeIdempotency(t *testing.T) {
 
 	// Capture all relevant output files after the first run.
 	claudeMDPath := filepath.Join(home, ".claude", "CLAUDE.md")
-	engramMCPPath := filepath.Join(home, ".claude", "mcp", "engram.json")
+	engramMCPPath := filepath.Join(home, ".claude.json")
 
 	claudeMDAfterRun1, err := os.ReadFile(claudeMDPath)
 	if err != nil {
@@ -1523,9 +2115,10 @@ func TestRunInstallCustomPresetExplicitSkillsFlagPopulatesSelection(t *testing.T
 			skillCount++
 		}
 	}
-	// 10 SDD skills (from sdd dep) + 2 explicit skills (go-testing, branch-pr) = 12
-	if skillCount != 12 {
-		t.Fatalf("expected 12 skill files (10 SDD + 2 explicit), got %d", skillCount)
+	// 11 SDD skills (includes sdd-onboard, judgment-day) + 2 explicit skills
+	// (go-testing, branch-pr) + 1 _shared/SKILL.md = 14.
+	if skillCount != 14 {
+		t.Fatalf("expected 14 skill files (11 SDD + 2 explicit + 1 _shared), got %d", skillCount)
 	}
 }
 
@@ -1582,10 +2175,11 @@ func TestRunInstallCustomPresetSkillsNoFlagInstallsNothing(t *testing.T) {
 			}
 		}
 	}
-	// Expect exactly 10 SKILL.md files (from SDD dependency: 9 SDD phases + judgment-day).
+	// Expect exactly 12 SKILL.md files: 10 SDD phases + judgment-day
+	// (from SDD dependency) + 1 _shared/SKILL.md.
 	// The skills component itself adds 0 (no --skills flag, SkillsForPreset(custom) = nil).
-	if skillCount != 10 {
-		t.Fatalf("expected 10 SDD skill files installed by the sdd dependency, got %d", skillCount)
+	if skillCount != 12 {
+		t.Fatalf("expected 12 SDD skill files installed by the sdd dependency, got %d", skillCount)
 	}
 }
 
@@ -1721,13 +2315,393 @@ func TestOpenCodePersonaBeforeSDDPreservesAllSections(t *testing.T) {
 		t.Error("AGENTS.md should NOT have sdd-orchestrator marker — OpenCode uses opencode.json agent overlay")
 	}
 
-	// SDD orchestrator for OpenCode lives in opencode.json agent overlay
+	// SDD orchestrator for OpenCode lives in opencode.json agent overlay under
+	// the canonical gentle-orchestrator key. Legacy sdd-orchestrator should be
+	// migrated away during injection.
 	opencodeJSON := filepath.Join(home, ".config", "opencode", "opencode.json")
 	jsonContent, err := os.ReadFile(opencodeJSON)
 	if err != nil {
 		t.Fatalf("ReadFile(opencode.json) error = %v", err)
 	}
-	if !strings.Contains(string(jsonContent), "sdd-orchestrator") {
-		t.Error("opencode.json missing sdd-orchestrator agent entry (SDD not injected)")
+	jsonText := string(jsonContent)
+	if !strings.Contains(jsonText, "gentle-orchestrator") {
+		t.Error("opencode.json missing gentle-orchestrator agent entry (SDD not injected)")
+	}
+	if strings.Contains(jsonText, `"sdd-orchestrator"`) {
+		t.Error("opencode.json should not contain legacy sdd-orchestrator agent entry")
+	}
+}
+func TestRunInstallKimiBootstrapsHub(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = missingBinaryLookPath
+	restoreInstallcmdLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
+		if name == "uv" {
+			return "/usr/bin/uv", nil
+		}
+		return "", exec.ErrNotFound
+	})
+	t.Cleanup(restoreInstallcmdLookPath)
+
+	// This test targets kimiSystemPromptHubStep bootstrap content, not agent
+	// install behavior, so simulate Kimi as already installed — otherwise
+	// gentle-ai correctly refuses to proceed for an undetected runtime.
+	restoreKimiLookPath := kimi.LookPathOverride
+	kimi.LookPathOverride = func(string) (string, error) { return "/usr/local/bin/kimi", nil }
+	t.Cleanup(func() { kimi.LookPathOverride = restoreKimiLookPath })
+
+	// Install Kimi with minimalist component (e.g., permissions only, NO persona).
+	_, err := RunInstall(
+		[]string{"--agent", "kimi", "--component", "permissions"},
+		system.DetectionResult{},
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	// Verify that KIMI.md was created in the agent's config dir.
+	hubPath := filepath.Join(home, ".kimi", "KIMI.md")
+	if _, err := os.Stat(hubPath); err != nil {
+		t.Fatalf("expected Kimi prompt hub file %q to be bootstrapped: %v", hubPath, err)
+	}
+
+	// Verify content includes sub-modules (basic check).
+	content, err := os.ReadFile(hubPath)
+	if err != nil {
+		t.Fatalf("failed to read bootstrapped hub: %v", err)
+	}
+	if !strings.Contains(string(content), "{% include \"persona.md\" ignore missing %}") {
+		t.Errorf("bootstrapped hub missing modular include: %s", string(content))
+	}
+}
+
+// TestRunInstallRefusesMissingKimiRegardlessOfUVPresence proves that when
+// Kimi is not detected, gentle-ai refuses and names the exact `uv` command
+// the user would run themselves — it no longer preflights uv presence for
+// Kimi at all (uv is not Pi's dependency, and gentle-ai never runs this
+// command itself), so the refusal fires the same way whether uv is on this
+// machine's PATH or not. Before this behavior existed, this same scenario
+// (Kimi undetected, uv missing) failed earlier and differently — at
+// checkDependenciesStep's preflight, with a "preflight for agent kimi: uv"
+// error — see git history for the prior version of this test,
+// TestRunInstallKimiMissingUVFailsBeforeExecutingInstallCommands.
+func TestRunInstallRefusesMissingKimiRegardlessOfUVPresence(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = missingBinaryLookPath
+
+	recorder := &commandRecorder{}
+	runCommand = recorder.record
+
+	// Force Kimi absent explicitly rather than relying on it happening to be
+	// missing from the machine running go test — the whole point of this
+	// test is the refusal on genuine absence, so absence must be the tested
+	// condition, not an accident of the environment.
+	restoreKimiLookPath := kimi.LookPathOverride
+	kimi.LookPathOverride = func(string) (string, error) { return "", exec.ErrNotFound }
+	t.Cleanup(func() { kimi.LookPathOverride = restoreKimiLookPath })
+
+	restoreInstallcmdLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
+		if name == "uv" {
+			return "", exec.ErrNotFound
+		}
+		return "/usr/bin/" + name, nil
+	})
+	t.Cleanup(restoreInstallcmdLookPath)
+
+	// The refusal makes Apply fail, which triggers rollback of the
+	// pre-install snapshot; rollback validates restored paths are under the
+	// real user home directory, so it needs this test's fake home too (see
+	// TestRunInstallRefusesMissingOpenCodeInsteadOfInstalling for the same
+	// fix and its full explanation).
+	restoreBackupHome := backup.UserHomeDirFn
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	t.Cleanup(func() { backup.UserHomeDirFn = restoreBackupHome })
+
+	_, err := RunInstall(
+		[]string{"--agent", "kimi", "--component", "permissions"},
+		macOSDetectionResult(),
+	)
+	if err == nil {
+		t.Fatal("RunInstall() error = nil, want a refusal because Kimi is not installed")
+	}
+
+	const wantCommand = "uv tool install --python 3.13 kimi-cli"
+	if !strings.Contains(err.Error(), wantCommand) {
+		t.Fatalf("RunInstall() error = %q, want it to name %q", err.Error(), wantCommand)
+	}
+
+	if got := recorder.get(); len(got) != 0 {
+		t.Fatalf("commands executed = %v, want none — gentle-ai must never run an install command on the user's behalf", got)
+	}
+}
+
+func TestRunInstallKimiAlreadyInstalledDoesNotRequireUV(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = missingBinaryLookPath
+	recorder := &commandRecorder{}
+	runCommand = recorder.record
+
+	originalKimiLookPath := kimi.LookPathOverride
+	kimi.LookPathOverride = func(name string) (string, error) {
+		if name == "kimi" {
+			return "/usr/local/bin/kimi", nil
+		}
+		return "", exec.ErrNotFound
+	}
+	t.Cleanup(func() { kimi.LookPathOverride = originalKimiLookPath })
+
+	restoreInstallcmdLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
+		if name == "uv" {
+			return "", exec.ErrNotFound
+		}
+		return "/usr/bin/" + name, nil
+	})
+	t.Cleanup(restoreInstallcmdLookPath)
+
+	result, err := RunInstall(
+		[]string{"--agent", "kimi", "--component", "permissions"},
+		macOSDetectionResult(),
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	if !result.Verify.Ready {
+		t.Fatalf("verification ready = false, report = %#v", result.Verify)
+	}
+
+	hubPath := filepath.Join(home, ".kimi", "KIMI.md")
+	if _, err := os.Stat(hubPath); err != nil {
+		t.Fatalf("expected Kimi prompt hub file %q to be bootstrapped: %v", hubPath, err)
+	}
+
+	if got := recorder.get(); len(got) != 0 {
+		t.Fatalf("expected no install commands when Kimi is already installed, got: %v", got)
+	}
+}
+
+// TestRunInstallWorkspaceScopeVerification verifies the user-visible 'install --scope=workspace'
+// behavior from issue #785. It ensures that when installing with workspace scope:
+// 1. Verification files are written to the workspace directory, NOT the home directory.
+// 2. Post-apply verification succeeds because it checks the workspace skill paths.
+func TestRunInstallWorkspaceScopeVerification(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+
+	originalCwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get current wd: %v", err)
+	}
+
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+		if err := os.Chdir(originalCwd); err != nil {
+			t.Errorf("failed to restore working directory: %v", err)
+		}
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) {
+		return "/usr/local/bin/" + name, nil
+	}
+
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("failed to change working directory to temp workspace: %v", err)
+	}
+
+	// Run install with workspace scope, installing Claude Code agent and skills component
+	args := []string{
+		"--scope", "workspace",
+		"--agent", "claude-code",
+		"--component", "skills",
+		"--preset", "custom",
+		"--skill", "go-testing,branch-pr",
+	}
+
+	result, err := RunInstall(args, system.DetectionResult{})
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	if !result.Verify.Ready {
+		t.Fatalf("post-apply verification failed, report = %#v", result.Verify)
+	}
+
+	// Assert that skill files were written to the workspace directory.
+	expectedWorkspaceSkillFile := filepath.Join(workspace, ".claude", "skills", "go-testing", "SKILL.md")
+	if _, err := os.Stat(expectedWorkspaceSkillFile); err != nil {
+		t.Errorf("expected skill file in workspace %q, but was missing: %v", expectedWorkspaceSkillFile, err)
+	}
+
+	// Assert that no skill files were written to the home directory.
+	unexpectedHomeSkillFile := filepath.Join(home, ".claude", "skills", "go-testing", "SKILL.md")
+	if _, err := os.Stat(unexpectedHomeSkillFile); err == nil {
+		t.Errorf("unexpected skill file found in home directory: %q", unexpectedHomeSkillFile)
+	}
+}
+
+// TestRunInstall_Context7WorkspaceScope_PersistsToWorkspace verifies that executing
+// a real workspace operation with --scope workspace and Context7 component:
+//  1. Returns a successful result with verification ready.
+//  2. Persists Context7 MCP configuration into <project-root>/.mcp.json, the file
+//     Claude Code loads project-scoped MCP servers from (issue #2213).
+//  3. Leaves the user's home directory settings untouched.
+func TestRunInstall_Context7WorkspaceScope_PersistsToWorkspace(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	originalCwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get current working directory: %v", err)
+	}
+
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+		if err := os.Chdir(originalCwd); err != nil {
+			t.Errorf("failed to restore working directory: %v", err)
+		}
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) {
+		return "/usr/local/bin/" + name, nil
+	}
+
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("failed to change working directory to temp workspace: %v", err)
+	}
+
+	args := []string{
+		"--scope", "workspace",
+		"--agent", "claude-code",
+		"--component", "context7",
+		"--preset", "custom",
+	}
+
+	result, err := RunInstall(args, system.DetectionResult{})
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	if !result.Verify.Ready {
+		t.Fatalf("post-apply verification failed for Context7 workspace scope: %#v", result.Verify)
+	}
+
+	// Context7 MCP configuration must persist to <project-root>/.mcp.json, the
+	// file Claude Code loads project-scoped MCP servers from (issue #2213).
+	workspaceMCPFile := filepath.Join(workspace, ".mcp.json")
+	assertFileContains(t, workspaceMCPFile, "context7")
+
+	// The legacy .claude/settings.json key is inert for MCP discovery and must
+	// not carry the managed context7 entry after install.
+	if settingsRaw, err := os.ReadFile(filepath.Join(workspace, ".claude", "settings.json")); err == nil {
+		if strings.Contains(string(settingsRaw), `"mcpServers"`) {
+			t.Errorf("workspace .claude/settings.json must not carry mcpServers; got %s", settingsRaw)
+		}
+	}
+
+	// Assert that no Context7 configuration was written to home directory settings.
+	homeSettingsFile := filepath.Join(home, ".claude", "settings.json")
+	if _, err := os.Stat(homeSettingsFile); err == nil {
+		content, _ := os.ReadFile(homeSettingsFile)
+		if strings.Contains(string(content), "context7") {
+			t.Errorf("unexpected Context7 MCP config found in home settings file: %q", homeSettingsFile)
+		}
+	}
+}
+
+// TestRunInstall_Context7WorkspaceScope_FailurePath verifies that executing
+// Context7 workspace installation when workspace target is unwriteable fails gracefully,
+// returning an error and reporting verification failure.
+func TestRunInstall_Context7WorkspaceScope_FailurePath(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	originalCwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get current working directory: %v", err)
+	}
+
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+		if err := os.Chdir(originalCwd); err != nil {
+			t.Errorf("failed to restore working directory: %v", err)
+		}
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) {
+		return "/usr/local/bin/" + name, nil
+	}
+
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("failed to change working directory to temp workspace: %v", err)
+	}
+
+	// Block the <project-root>/.mcp.json write by making it a directory, so the
+	// atomic file write fails. The primary workspace-scope target is .mcp.json
+	// (issue #2213), not .claude/settings.json.
+	blockingPath := filepath.Join(workspace, ".mcp.json")
+	if err := os.Mkdir(blockingPath, 0o755); err != nil {
+		t.Fatalf("failed to create blocking .mcp.json directory: %v", err)
+	}
+
+	args := []string{
+		"--scope", "workspace",
+		"--agent", "claude-code",
+		"--component", "context7",
+		"--preset", "custom",
+	}
+
+	_, err = RunInstall(args, system.DetectionResult{})
+	if err == nil {
+		t.Fatalf("RunInstall() with unwriteable workspace target expected error, got nil")
 	}
 }

@@ -3,13 +3,17 @@ package upgrade
 import (
 	"errors"
 
-	"github.com/Thrasno/conpas-ai/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 )
 
 // ToolUpgradeStatus describes the outcome of a single tool upgrade attempt.
 type ToolUpgradeStatus string
 
 const (
+	// UpgradeSucceeded means the selected strategy completed successfully. For
+	// OpenCode plugins, this specifically means the expected package manifest
+	// version was observed; it does not assert that a running OpenCode process
+	// has already reloaded the plugin.
 	UpgradeSucceeded ToolUpgradeStatus = "succeeded"
 	UpgradeFailed    ToolUpgradeStatus = "failed"
 	UpgradeSkipped   ToolUpgradeStatus = "skipped" // dry-run, dev build, or unsupported platform
@@ -45,8 +49,12 @@ type ToolUpgradeResult struct {
 	Status     ToolUpgradeStatus
 	Err        error
 	// ManualHint is set when the tool requires manual intervention instead of
-	// automated upgrade (e.g. Windows self-replace, unsupported binary path).
+	// automated upgrade (e.g. a disabled or unsupported binary path).
 	ManualHint string
+
+	// ExitRequested is reserved for strategies that require the parent process to
+	// exit immediately after success.
+	ExitRequested bool
 }
 
 // UpgradeReport is the top-level result returned by Execute.
@@ -62,4 +70,8 @@ type UpgradeReport struct {
 
 	Results []ToolUpgradeResult
 	DryRun  bool
+
+	// ExitRequested is true if any executed tool requested an immediate exit. The
+	// caller is responsible for exiting.
+	ExitRequested bool
 }

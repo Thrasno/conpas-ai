@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # lib.sh — shared test helpers for gentle-ai E2E tests
 # Sourced by e2e_test.sh; never executed directly.
-set -euo pipefail
+#
+# Deliberately NO `set -e` here: `source` shares shell options with the
+# caller, and this suite counts failures and continues (log_fail counters +
+# print_summary). Under a leaked `-e`, the first unguarded failing assertion
+# aborts the whole script — no remaining tests, no summary, no totals
+# (issue #2466). Failures still fail the run: print_summary returns nonzero
+# when FAILED > 0.
+set -uo pipefail
 
 # ---------------------------------------------------------------------------
 # Colors
@@ -18,13 +25,16 @@ NC='\033[0m' # No Color
 PASSED=0
 FAILED=0
 SKIPPED=0
+# Labels of every failed check, replayed by print_summary so a long run
+# ends with the full list of what failed, not just a count.
+FAILED_CHECKS=()
 
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
 log_test()  { printf "${YELLOW}[TEST]${NC}  %s\n" "$1"; }
 log_pass()  { printf "${GREEN}[PASS]${NC}  %s\n" "$1"; PASSED=$((PASSED + 1)); }
-log_fail()  { printf "${RED}[FAIL]${NC}  %s\n" "$1"; FAILED=$((FAILED + 1)); }
+log_fail()  { printf "${RED}[FAIL]${NC}  %s\n" "$1"; FAILED=$((FAILED + 1)); FAILED_CHECKS+=("$1"); }
 log_skip()  { printf "${BLUE}[SKIP]${NC}  %s\n" "$1"; SKIPPED=$((SKIPPED + 1)); }
 log_info()  { printf "${BLUE}[INFO]${NC}  %s\n" "$1"; }
 
@@ -70,12 +80,66 @@ cleanup_test_env() {
     rm -rf "$HOME/.config/gga" 2>/dev/null || true
     rm -rf "$HOME/.config/Windsurf" 2>/dev/null || true
     rm -rf "$HOME/.claude" 2>/dev/null || true
+    rm -f "$HOME/.claude.json" 2>/dev/null || true
     rm -rf "$HOME/.codex" 2>/dev/null || true
     rm -rf "$HOME/.gemini" 2>/dev/null || true
     rm -rf "$HOME/.gentle-ai" 2>/dev/null || true
     rm -rf "$HOME/.codeium" 2>/dev/null || true
     rm -rf "$HOME/.cursor" 2>/dev/null || true
+    rm -rf "$HOME/.qwen" 2>/dev/null || true
+    rm -rf "$HOME/.kiro" 2>/dev/null || true
+    rm -rf "$HOME/.kimi" 2>/dev/null || true
     mkdir -p "$HOME/.config"
+}
+
+# setup_fake_engram_binary — install a deterministic local engram shim for E2E.
+#
+# Full Docker E2E validates gentle-ai's agent/config injection behavior, not the
+# external Engram release CDN. The real installer skips the network download when
+# an `engram` binary already exists on PATH, so this shim keeps coverage of the
+# install pipeline while avoiding flaky GitHub API/rate-limit failures.
+#
+# Set GENTLE_AI_E2E_REAL_ENGRAM=1 to opt out and exercise the live download path.
+setup_fake_engram_binary() {
+    if [ "${GENTLE_AI_E2E_REAL_ENGRAM:-0}" = "1" ]; then
+        log_info "Using real Engram binary/download path for E2E"
+        return 0
+    fi
+
+    local fake_bin_dir="$HOME/.gentle-ai-e2e/bin"
+    local fake_engram="$fake_bin_dir/engram"
+
+    mkdir -p "$fake_bin_dir"
+    cat > "$fake_engram" <<'EOF'
+#!/usr/bin/env sh
+set -eu
+
+case "${1:-}" in
+  setup)
+    exit 0
+    ;;
+  mcp)
+    # Keep the shim alive if an MCP client probes it during E2E, but do not
+    # require real Engram services or network access.
+    exit 0
+    ;;
+  version|--version|-v)
+    printf 'engram e2e-shim\n'
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+EOF
+    chmod +x "$fake_engram"
+
+    case ":$PATH:" in
+        *":$fake_bin_dir:"*) ;;
+        *) export PATH="$fake_bin_dir:$PATH" ;;
+    esac
+
+    log_info "Using deterministic Engram E2E shim: $fake_engram"
 }
 
 # setup_fake_configs — seed fake config files so backup tests have something
@@ -227,6 +291,25 @@ assert_valid_json() {
     fi
 }
 
+# json_files_equal FILE1 FILE2
+# Returns 0 if both files contain semantically equal JSON (key order ignored).
+# Uses python3 for comparison (available in CI and most dev machines).
+json_files_equal() {
+    local file1="$1"
+    local file2="$2"
+    if ! command -v python3 >/dev/null 2>&1; then
+        # Fallback: byte comparison (may false-fail on key reorder)
+        [ "$(md5sum "$file1" | cut -d' ' -f1)" = "$(md5sum "$file2" | cut -d' ' -f1)" ]
+        return $?
+    fi
+    python3 -c "
+import json, sys
+a = json.load(open(sys.argv[1]))
+b = json.load(open(sys.argv[2]))
+sys.exit(0 if a == b else 1)
+" "$file1" "$file2"
+}
+
 # assert_file_count DIR PATTERN EXPECTED LABEL
 # Checks that the number of files matching glob PATTERN in DIR equals EXPECTED.
 assert_file_count() {
@@ -309,7 +392,10 @@ assert_no_duplicate_section() {
     fi
     local marker="<!-- gentle-ai:${section_id} -->"
     local count
-    count=$(grep -c "$marker" "$file" 2>/dev/null || echo "0")
+    # `grep -c` prints "0" AND exits 1 on zero matches, so `|| echo 0` would
+    # yield the two-line string "0\n0" and break the numeric comparisons below.
+    count=$(grep -c "$marker" "$file" 2>/dev/null || true)
+    count=${count:-0}
     if [ "$count" -eq 1 ]; then
         log_pass "$label"
         return 0
@@ -364,6 +450,11 @@ print_summary() {
     echo "========================================"
 
     if [ "$FAILED" -gt 0 ]; then
+        printf "\n%bFailed checks:%b\n" "$RED" "$NC"
+        local check
+        for check in "${FAILED_CHECKS[@]}"; do
+            printf "  - %s\n" "$check"
+        done
         printf "\n%bSome tests failed.%b\n" "$RED" "$NC"
         return 1
     fi

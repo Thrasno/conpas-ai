@@ -3,18 +3,32 @@ package upgrade
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
-	"github.com/Thrasno/conpas-ai/internal/system"
-	"github.com/Thrasno/conpas-ai/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 )
+
+func TestMain(m *testing.M) {
+	if err := os.Unsetenv("GENTLE_AI_CHANNEL"); err != nil {
+		panic(err)
+	}
+
+	os.Exit(m.Run())
+}
 
 // --- TestRunStrategy_BrewUpgrade ---
 
 func TestRunStrategy_BrewUpgrade(t *testing.T) {
+	mockHomebrewOwnership(t, update.HomebrewFormula)
 	origExecCommand := execCommand
 	t.Cleanup(func() { execCommand = origExecCommand })
 
@@ -23,7 +37,7 @@ func TestRunStrategy_BrewUpgrade(t *testing.T) {
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		gotName = name
 		gotArgs = args
-		return exec.Command("echo", "Upgraded engram")
+		return mockCmd("echo", "Upgraded engram")
 	}
 
 	r := update.UpdateResult{
@@ -35,7 +49,7 @@ func TestRunStrategy_BrewUpgrade(t *testing.T) {
 	}
 	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew"}
 
-	err := runStrategy(context.Background(), r, profile)
+	_, err := runStrategy(context.Background(), r, profile)
 	if err != nil {
 		t.Fatalf("runStrategy brew: unexpected error: %v", err)
 	}
@@ -43,8 +57,8 @@ func TestRunStrategy_BrewUpgrade(t *testing.T) {
 	if gotName != "brew" {
 		t.Errorf("exec name = %q, want %q", gotName, "brew")
 	}
-	if len(gotArgs) < 2 || gotArgs[0] != "upgrade" || gotArgs[1] != "engram" {
-		t.Errorf("exec args = %v, want [upgrade engram]", gotArgs)
+	if len(gotArgs) < 3 || gotArgs[0] != "upgrade" || gotArgs[1] != "--formula" || gotArgs[2] != "engram" {
+		t.Errorf("exec args = %v, want [upgrade --formula engram]", gotArgs)
 	}
 }
 
@@ -59,7 +73,7 @@ func TestRunStrategy_GoInstallUpgrade(t *testing.T) {
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		gotName = name
 		gotArgs = args
-		return exec.Command("echo", "go install ok")
+		return mockCmd("echo", "go install ok")
 	}
 
 	r := update.UpdateResult{
@@ -72,7 +86,7 @@ func TestRunStrategy_GoInstallUpgrade(t *testing.T) {
 	}
 	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
 
-	err := runStrategy(context.Background(), r, profile)
+	_, err := runStrategy(context.Background(), r, profile)
 	if err != nil {
 		t.Fatalf("runStrategy go-install: unexpected error: %v", err)
 	}
@@ -84,6 +98,85 @@ func TestRunStrategy_GoInstallUpgrade(t *testing.T) {
 	wantArg0, wantArg1 := "install", "github.com/Gentleman-Programming/engram/cmd/engram@v0.4.0"
 	if len(gotArgs) < 2 || gotArgs[0] != wantArg0 || gotArgs[1] != wantArg1 {
 		t.Errorf("exec args = %v, want [%s %s]", gotArgs, wantArg0, wantArg1)
+	}
+}
+
+func TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMain(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+
+	var gotName string
+	var gotArgs []string
+	var gotCmd *exec.Cmd
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		gotName = name
+		gotArgs = args
+		gotCmd = mockCmd("true")
+		return gotCmd
+	}
+
+	r := update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          "gentle-ai",
+			Owner:         "Gentleman-Programming",
+			Repo:          "gentle-ai",
+			InstallMethod: update.InstallBinary,
+		},
+		LatestVersion: "main@972997650b51",
+		Status:        update.UpdateAvailable,
+	}
+	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt", Supported: true}
+
+	_, err := runStrategy(context.Background(), r, profile)
+	if err != nil {
+		t.Fatalf("runStrategy beta gentle-ai: unexpected error: %v", err)
+	}
+
+	if gotName != "go" {
+		t.Fatalf("exec name = %q, want %q", gotName, "go")
+	}
+	wantArgs := []string{"install", "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main"}
+	if len(gotArgs) != len(wantArgs) || gotArgs[0] != wantArgs[0] || gotArgs[1] != wantArgs[1] {
+		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
+	}
+	for _, want := range []string{
+		"GONOSUMDB=github.com/gentleman-programming/gentle-ai/v2",
+		"GOPRIVATE=github.com/gentleman-programming/gentle-ai/v2",
+		"GONOPROXY=github.com/gentleman-programming/gentle-ai/v2",
+	} {
+		if !envContains(gotCmd.Env, want) {
+			t.Fatalf("go install env missing %q in %v", want, gotCmd.Env)
+		}
+	}
+}
+
+func envContains(env []string, want string) bool {
+	for _, entry := range env {
+		if entry == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestGoProxyBypassEnvPreservesExistingPatterns(t *testing.T) {
+	module := "github.com/gentleman-programming/gentle-ai/v2"
+	env := goProxyBypassEnv([]string{
+		"PATH=/usr/bin",
+		"GONOSUMDB=example.com/private",
+		"GOPRIVATE=github.com/acme/*",
+		"GONOPROXY=github.com/gentleman-programming/gentle-ai/v2",
+	}, module)
+
+	for _, want := range []string{
+		"PATH=/usr/bin",
+		"GONOSUMDB=github.com/gentleman-programming/gentle-ai/v2,example.com/private",
+		"GOPRIVATE=github.com/gentleman-programming/gentle-ai/v2,github.com/acme/*",
+		"GONOPROXY=github.com/gentleman-programming/gentle-ai/v2",
+	} {
+		if !envContains(env, want) {
+			t.Fatalf("env missing %q in %v", want, env)
+		}
 	}
 }
 
@@ -100,7 +193,7 @@ func TestRunStrategy_GoInstallMissingImportPath(t *testing.T) {
 	}
 	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
 
-	err := runStrategy(context.Background(), r, profile)
+	_, err := runStrategy(context.Background(), r, profile)
 	if err == nil {
 		t.Errorf("expected error when GoImportPath is empty, got nil")
 	}
@@ -118,7 +211,7 @@ func TestRunStrategy_UnsupportedMethodManualFallback(t *testing.T) {
 	}
 	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
 
-	err := runStrategy(context.Background(), r, profile)
+	_, err := runStrategy(context.Background(), r, profile)
 	// Unsupported method → manual fallback error.
 	if err == nil {
 		t.Errorf("expected error for unsupported install method, got nil")
@@ -132,7 +225,7 @@ func TestRunStrategy_BrewUpgradeFailure(t *testing.T) {
 	t.Cleanup(func() { execCommand = origExecCommand })
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("false") // always fails
+		return mockCmd("false") // always fails
 	}
 
 	r := update.UpdateResult{
@@ -144,7 +237,7 @@ func TestRunStrategy_BrewUpgradeFailure(t *testing.T) {
 	}
 	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew"}
 
-	err := runStrategy(context.Background(), r, profile)
+	_, err := runStrategy(context.Background(), r, profile)
 	if err == nil {
 		t.Errorf("expected error when brew upgrade fails, got nil")
 	}
@@ -157,7 +250,7 @@ func TestRunStrategy_GoInstallFailure(t *testing.T) {
 	t.Cleanup(func() { execCommand = origExecCommand })
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("false")
+		return mockCmd("false")
 	}
 
 	r := update.UpdateResult{
@@ -170,74 +263,143 @@ func TestRunStrategy_GoInstallFailure(t *testing.T) {
 	}
 	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
 
-	err := runStrategy(context.Background(), r, profile)
+	_, err := runStrategy(context.Background(), r, profile)
 	if err == nil {
 		t.Errorf("expected error when go install fails, got nil")
 	}
 }
 
-// --- TestRunStrategy_BinaryWindowsSelfUpdateSkipped ---
-
-// TestRunStrategy_BinaryWindowsSelfUpdateSkipped verifies that the Windows binary
-// self-replace for gentle-ai is NOT attempted in Phase 1 — it must return a
-// manual hint error, not execute.
-func TestRunStrategy_BinaryWindowsSelfUpdateSkipped(t *testing.T) {
-	origExecCommand := execCommand
-	t.Cleanup(func() { execCommand = origExecCommand })
-
-	execCalled := false
-	execCommand = func(name string, args ...string) *exec.Cmd {
-		execCalled = true
-		return exec.Command("echo", "should not run")
-	}
-
-	r := update.UpdateResult{
-		Tool: update.ToolInfo{
-			Name:          "conpas-ai",
-			InstallMethod: update.InstallBinary,
+// TestEffectiveMethodGentleAIOnWindowsUsesFailClosedBinaryPolicy verifies that
+// Windows never routes gentle-ai through a remote installer, and that when no
+// usable `go install` target is declared it falls back to the binary strategy —
+// which on Windows is an explicit refusal naming a runnable source-install
+// command, not a download.
+func TestEffectiveMethodGentleAIOnWindowsUsesFailClosedBinaryPolicy(t *testing.T) {
+	tests := []struct {
+		name string
+		tool update.ToolInfo
+	}{
+		{
+			name: "binary remains policy boundary",
+			tool: update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary},
 		},
-		LatestVersion: "1.5.0",
-		ReleaseURL:    "https://github.com/Thrasno/conpas-ai/releases/tag/v1.5.0",
-	}
-	profile := system.PlatformProfile{OS: "windows", PackageManager: "winget"}
-
-	err := runStrategy(context.Background(), r, profile)
-	// Windows binary self-replace must return an error (manual hint) in Phase 1.
-	if err == nil {
-		t.Errorf("expected manual fallback error for Windows binary self-replace, got nil")
+		{
+			name: "legacy script declaration is disabled",
+			tool: update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallScript},
+		},
 	}
 
-	if execCalled {
-		t.Errorf("exec should NOT be called for Windows binary self-replace in Phase 1")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := system.PlatformProfile{OS: "windows", PackageManager: "winget", GoAvailable: true}
+			method := effectiveMethod(tc.tool, profile)
+			if method != update.InstallBinary {
+				t.Errorf("effectiveMethod(%q) = %q, want %q", tc.tool.Name, method, update.InstallBinary)
+			}
+		})
+	}
+
+	// Renamed from "Go availability still requires an explicit source install",
+	// which encoded the previous policy: Windows refused to self-upgrade even
+	// with Go on PATH. That policy has been changed deliberately. No signed
+	// Windows binary is published, so there is no asset to download and verify
+	// with minisign; a pinned `go install <importPath>@vX.Y.Z` — still checked
+	// against the Go checksum database, since goInstallUpgrade does not touch
+	// cmd.Env — is the only automatic upgrade path Windows has.
+	t.Run("Go availability upgrades through a pinned go install", func(t *testing.T) {
+		tool := update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary, GoImportPath: "github.com/Gentleman-Programming/gentle-ai/v2/cmd/gentle-ai"}
+		profile := system.PlatformProfile{OS: "windows", PackageManager: "winget", GoAvailable: true}
+		method := effectiveMethod(tool, profile)
+		if method != update.InstallGoInstall {
+			t.Errorf("effectiveMethod(%q) = %q, want %q", tool.Name, method, update.InstallGoInstall)
+		}
+	})
+}
+
+// --- TestEffectiveMethod_NonGentleAIToolsOnWindowsUseBinary ---
+
+// TestEffectiveMethod_NonGentleAIToolsOnWindowsUseBinary verifies that tools
+// OTHER than gentle-ai on Windows still use their declared install method
+// (binary, script, etc.).
+func TestEffectiveMethod_NonGentleAIToolsOnWindowsUseBinary(t *testing.T) {
+	tests := []struct {
+		name string
+		tool update.ToolInfo
+		want update.InstallMethod
+	}{
+		{
+			name: "engram uses binary",
+			tool: update.ToolInfo{Name: "engram", InstallMethod: update.InstallBinary},
+			want: update.InstallBinary,
+		},
+		{
+			name: "gga uses script",
+			tool: update.ToolInfo{Name: "gga", InstallMethod: update.InstallScript},
+			want: update.InstallScript,
+		},
+		{
+			name: "unknown tool uses binary",
+			tool: update.ToolInfo{Name: "other", InstallMethod: update.InstallBinary},
+			want: update.InstallBinary,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := system.PlatformProfile{OS: "windows", PackageManager: "winget", GoAvailable: true}
+			method := effectiveMethod(tc.tool, profile)
+			if method != tc.want {
+				t.Errorf("effectiveMethod(%q) = %q, want %q", tc.tool.Name, method, tc.want)
+			}
+		})
 	}
 }
 
 // --- TestEffectiveMethod ---
 
 func TestEffectiveMethod(t *testing.T) {
+	origHomebrewPackageInstalled := homebrewPackageInstalled
+	t.Cleanup(func() { homebrewPackageInstalled = origHomebrewPackageInstalled })
+
 	tests := []struct {
-		name    string
-		tool    update.ToolInfo
-		profile system.PlatformProfile
-		want    update.InstallMethod
+		name          string
+		tool          update.ToolInfo
+		profile       system.PlatformProfile
+		brewInstalled bool
+		want          update.InstallMethod
 	}{
 		{
-			name:    "brew profile overrides go-install",
-			tool:    update.ToolInfo{Name: "engram", InstallMethod: update.InstallGoInstall},
-			profile: system.PlatformProfile{PackageManager: "brew"},
-			want:    update.InstallBrew,
+			name:          "brew-owned package overrides go-install",
+			tool:          update.ToolInfo{Name: "engram", InstallMethod: update.InstallGoInstall},
+			profile:       system.PlatformProfile{PackageManager: "brew"},
+			brewInstalled: true,
+			want:          update.InstallBrew,
 		},
 		{
-			name:    "brew profile overrides binary",
-			tool:    update.ToolInfo{Name: "gga", InstallMethod: update.InstallBinary},
-			profile: system.PlatformProfile{PackageManager: "brew"},
-			want:    update.InstallBrew,
+			name:          "brew-owned package overrides binary",
+			tool:          update.ToolInfo{Name: "gga", InstallMethod: update.InstallBinary},
+			profile:       system.PlatformProfile{PackageManager: "brew"},
+			brewInstalled: true,
+			want:          update.InstallBrew,
 		},
 		{
-			name:    "brew profile overrides script",
-			tool:    update.ToolInfo{Name: "gga", InstallMethod: update.InstallScript},
-			profile: system.PlatformProfile{PackageManager: "brew"},
-			want:    update.InstallBrew,
+			name:          "brew-owned package overrides script",
+			tool:          update.ToolInfo{Name: "gga", InstallMethod: update.InstallScript},
+			profile:       system.PlatformProfile{PackageManager: "brew"},
+			brewInstalled: true,
+			want:          update.InstallBrew,
+		},
+		{
+			name:    "brew profile without package ownership respects declared method",
+			tool:    update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary},
+			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
+			want:    update.InstallBinary,
+		},
+		{
+			name:    "brew profile without package ownership can use go-install fallback",
+			tool:    update.ToolInfo{Name: "mytool", InstallMethod: update.InstallBinary, GoImportPath: "github.com/example/mytool/cmd/mytool"},
+			profile: system.PlatformProfile{PackageManager: "brew", GoAvailable: true},
+			want:    update.InstallGoInstall,
 		},
 		{
 			name:    "apt profile respects declared method (go-install)",
@@ -257,10 +419,47 @@ func TestEffectiveMethod(t *testing.T) {
 			profile: system.PlatformProfile{PackageManager: "apt"},
 			want:    update.InstallScript,
 		},
+		{
+			name:          "brew profile does not override OpenCode plugin method",
+			tool:          update.ToolInfo{Name: "opencode-subagent-statusline", InstallMethod: update.InstallOpenCodePlugin, NpmPackage: "opencode-subagent-statusline"},
+			profile:       system.PlatformProfile{PackageManager: "brew"},
+			brewInstalled: true,
+			want:          update.InstallOpenCodePlugin,
+		},
+		// Auto-detect order: brew-owned package → go-install → binary (issue #246).
+		{
+			name:          "auto-detect: brew-owned package wins regardless of GoImportPath",
+			tool:          update.ToolInfo{Name: "mytool", InstallMethod: update.InstallBinary, GoImportPath: "github.com/example/mytool/cmd/mytool"},
+			profile:       system.PlatformProfile{PackageManager: "brew", GoAvailable: true},
+			brewInstalled: true,
+			want:          update.InstallBrew,
+		},
+		{
+			name:    "auto-detect: brew missing + go available + GoImportPath set → go-install",
+			tool:    update.ToolInfo{Name: "mytool", InstallMethod: update.InstallBinary, GoImportPath: "github.com/example/mytool/cmd/mytool"},
+			profile: system.PlatformProfile{PackageManager: "apt", GoAvailable: true},
+			want:    update.InstallGoInstall,
+		},
+		{
+			name:    "auto-detect: brew missing + go missing + GoImportPath set → binary fallback",
+			tool:    update.ToolInfo{Name: "mytool", InstallMethod: update.InstallBinary, GoImportPath: "github.com/example/mytool/cmd/mytool"},
+			profile: system.PlatformProfile{PackageManager: "apt", GoAvailable: false},
+			want:    update.InstallBinary,
+		},
+		{
+			name:    "auto-detect: go available but GoImportPath empty → binary (no upgrade)",
+			tool:    update.ToolInfo{Name: "mytool", InstallMethod: update.InstallBinary, GoImportPath: ""},
+			profile: system.PlatformProfile{PackageManager: "apt", GoAvailable: true},
+			want:    update.InstallBinary,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			homebrewPackageInstalled = func(toolName string) bool {
+				return toolName == tc.tool.Name && tc.brewInstalled
+			}
+
 			got := effectiveMethod(tc.tool, tc.profile)
 			if got != tc.want {
 				t.Errorf("effectiveMethod = %q, want %q", got, tc.want)
@@ -269,35 +468,598 @@ func TestEffectiveMethod(t *testing.T) {
 	}
 }
 
-// --- TestManualFallbackHint ---
+func TestHomebrewPackageInstalledWithRequiresActiveBrewPath(t *testing.T) {
+	brewPrefix := filepath.Join(t.TempDir(), "opt", "gentle-ai")
+	brewBin := filepath.Join(brewPrefix, "bin", "gentle-ai")
+	nonBrewBin := filepath.Join(t.TempDir(), "gentle-ai")
 
-// TestManualFallbackHint verifies that Windows binary self-replace produces an
-// actionable hint string, not an empty error.
-func TestManualFallbackHint(t *testing.T) {
-	r := update.UpdateResult{
+	run := func(name string, args ...string) *exec.Cmd {
+		if name != "brew" {
+			return mockCmd("false")
+		}
+		if len(args) >= 3 && args[0] == "list" && args[1] == "--formula" && args[2] == "gentle-ai" {
+			return mockCmd("true")
+		}
+		if len(args) == 2 && args[0] == "--prefix" && args[1] == "gentle-ai" {
+			return mockCmd("echo", brewPrefix)
+		}
+		return mockCmd("false")
+	}
+
+	if !homebrewPackageInstalledWith(run, func(string) (string, error) { return brewBin, nil }, "gentle-ai") {
+		t.Fatal("expected brew-owned active path to be treated as Homebrew installed")
+	}
+	if homebrewPackageInstalledWith(run, func(string) (string, error) { return nonBrewBin, nil }, "gentle-ai") {
+		t.Fatal("expected shadowing non-brew active path to avoid Homebrew")
+	}
+	if homebrewPackageInstalledWith(func(string, ...string) *exec.Cmd { return mockCmd("false") }, func(string) (string, error) { return brewBin, nil }, "gentle-ai") {
+		t.Fatal("expected brew list failure to avoid Homebrew")
+	}
+	if homebrewPackageInstalledWith(func(string, ...string) *exec.Cmd { return mockCmd("true") }, func(string) (string, error) { return "", errors.New("not found") }, "gentle-ai") {
+		t.Fatal("expected active path lookup failure to avoid Homebrew")
+	}
+}
+
+func TestRunStrategyOpenCodePluginManualFallback(t *testing.T) {
+	origHomeDir := openCodeHomeDir
+	origLookPath := lookPathCommand
+	origExecCommand := execCommand
+	t.Cleanup(func() {
+		openCodeHomeDir = origHomeDir
+		lookPathCommand = origLookPath
+		execCommand = origExecCommand
+	})
+
+	openCodeHomeDir = func() (string, error) { return t.TempDir(), nil }
+	lookPathCommand = func(file string) (string, error) { return "", errors.New("not found") }
+	execCalled := false
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		execCalled = true
+		return mockCmd("echo", "should not run")
+	}
+
+	_, err := runStrategy(context.Background(), update.UpdateResult{
 		Tool: update.ToolInfo{
-			Name:          "conpas-ai",
-			InstallMethod: update.InstallBinary,
+			Name:          "opencode-subagent-statusline",
+			InstallMethod: update.InstallOpenCodePlugin,
+			NpmPackage:    "opencode-subagent-statusline",
 		},
-		LatestVersion: "1.5.0",
-		UpdateHint:    "See https://github.com/Thrasno/conpas-ai/releases",
-	}
-	profile := system.PlatformProfile{OS: "windows", PackageManager: "winget"}
+		UpdateHint: "restart OpenCode",
+	}, system.PlatformProfile{PackageManager: "brew"})
 
-	err := runStrategy(context.Background(), r, profile)
 	if err == nil {
-		t.Fatal("expected error, got nil")
+		t.Fatal("expected manual fallback error, got nil")
+	}
+	if !containsAny(err.Error(), "OpenCode", "restart", "reload") {
+		t.Fatalf("manual fallback should mention OpenCode restart/reload, got: %v", err)
+	}
+	if execCalled {
+		t.Fatal("OpenCode plugin fallback should not run a package manager when config is missing")
 	}
 
-	msg := err.Error()
-	if msg == "" {
-		t.Errorf("manual fallback error message should not be empty")
+}
+
+func TestRunStrategyOpenCodePluginUpgradesMaterializedPackage(t *testing.T) {
+	origHomeDir := openCodeHomeDir
+	origLookPath := lookPathCommand
+	origExecCommand := execCommand
+	t.Cleanup(func() {
+		openCodeHomeDir = origHomeDir
+		lookPathCommand = origLookPath
+		execCommand = origExecCommand
+	})
+
+	home := t.TempDir()
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	pkg := "opencode-subagent-statusline"
+	pkgDir := filepath.Join(opencodeDir, "node_modules", pkg)
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"version":"0.1.0"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cacheRoot := filepath.Join(home, ".cache", "opencode", "packages")
+	targetCache := filepath.Join(cacheRoot, pkg+"@latest")
+	otherPluginCache := filepath.Join(cacheRoot, "opencode-sdd-engram-manage@latest")
+	versionedCache := filepath.Join(cacheRoot, pkg+"@0.5.2")
+	for _, dir := range []string{targetCache, otherPluginCache, versionedCache} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cwdFile := filepath.Join(t.TempDir(), "cwd.txt")
+
+	openCodeHomeDir = func() (string, error) { return home, nil }
+	lookPathCommand = func(file string) (string, error) {
+		if file == "bun" {
+			return "/usr/bin/bun", nil
+		}
+		return "", errors.New("not found")
 	}
 
-	// Hint should mention manual action or Windows.
-	if !containsAny(msg, "manual", "Manual", "windows", "Windows", "winget", "hint") {
-		t.Errorf("manual hint message %q does not mention manual or windows", msg)
+	var gotName string
+	var gotArgs []string
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		gotName = name
+		gotArgs = append([]string(nil), args...)
+		cmd := exec.Command(os.Args[0], "-test.run=TestOpenCodePluginUpgradeHelperProcess", "--")
+		cmd.Env = append(os.Environ(),
+			"GENTLE_AI_UPGRADE_HELPER=1",
+			"GENTLE_AI_UPGRADE_HELPER_CWD_FILE="+cwdFile,
+			"GENTLE_AI_UPGRADE_HELPER_MANIFEST_PATH="+filepath.Join(pkgDir, "package.json"),
+			"GENTLE_AI_UPGRADE_HELPER_MANIFEST_VERSION=0.2.0",
+		)
+		return cmd
 	}
+
+	outcome, err := runStrategyWithOutcome(context.Background(), update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          pkg,
+			InstallMethod: update.InstallOpenCodePlugin,
+			NpmPackage:    pkg,
+		},
+		InstalledVersion: "0.1.0",
+		LatestVersion:    " 0.2.0 ",
+	}, system.PlatformProfile{PackageManager: "brew"})
+	if err != nil {
+		t.Fatalf("runStrategy OpenCode plugin: unexpected error: %v", err)
+	}
+	if outcome.observedVersion != "0.2.0" {
+		t.Fatalf("observed version = %q, want 0.2.0 from the installed manifest", outcome.observedVersion)
+	}
+
+	if gotName != "bun" {
+		t.Fatalf("exec name = %q, want bun", gotName)
+	}
+	wantArgs := []string{"add", pkg + "@0.2.0", "@opencode-ai/plugin@latest"}
+	if strings.Join(gotArgs, " ") != strings.Join(wantArgs, " ") {
+		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
+	}
+	if _, err := os.Stat(targetCache); !os.IsNotExist(err) {
+		t.Fatalf("target OpenCode cache %s should be removed after upgrade, stat err: %v", targetCache, err)
+	}
+	for _, dir := range []string{otherPluginCache, versionedCache} {
+		if _, err := os.Stat(dir); err != nil {
+			t.Fatalf("non-target cache %s should remain, stat err: %v", dir, err)
+		}
+	}
+	cwd, err := os.ReadFile(cwdFile)
+	if err != nil {
+		t.Fatalf("read helper cwd: %v", err)
+	}
+	gotCwd, err := filepath.EvalSymlinks(string(cwd))
+	if err != nil {
+		t.Fatalf("resolve helper cwd: %v", err)
+	}
+	wantCwd, err := filepath.EvalSymlinks(opencodeDir)
+	if err != nil {
+		t.Fatalf("resolve OpenCode dir: %v", err)
+	}
+	if gotCwd != wantCwd {
+		t.Fatalf("command cwd = %q, want %q", gotCwd, wantCwd)
+	}
+}
+
+func TestRunStrategyOpenCodePluginRejectsUnverifiedMaterialization(t *testing.T) {
+	tests := []struct {
+		name           string
+		manifest       string
+		registerOnly   bool
+		latestVersion  string
+		wantFallback   bool
+		wantErrorParts []string
+	}{
+		{
+			name:           "empty expected version skips before package manager mutation",
+			registerOnly:   true,
+			latestVersion:  "  ",
+			wantFallback:   true,
+			wantErrorParts: []string{"expected version is empty"},
+		},
+		{
+			name:           "package manager succeeds without materializing the package",
+			registerOnly:   true,
+			latestVersion:  "0.8.0",
+			wantErrorParts: []string{"after bun mutation", "expected version \"0.8.0\"", "absent", "No automatic rollback", "restore or correct"},
+		},
+		{
+			name:           "package manager succeeds but leaves the stale version",
+			manifest:       `{"version":"0.7.1"}`,
+			latestVersion:  "0.8.0",
+			wantErrorParts: []string{"after bun mutation", "expected version \"0.8.0\"", "0.7.1", "No automatic rollback", "restore or correct"},
+		},
+		{
+			name:           "package manager succeeds but leaves an invalid manifest",
+			manifest:       `{not valid json`,
+			latestVersion:  "0.8.0",
+			wantErrorParts: []string{"after bun mutation", "expected version \"0.8.0\"", "invalid", "No automatic rollback", "restore or correct"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			origHomeDir, origLookPath, origExecCommand := openCodeHomeDir, lookPathCommand, execCommand
+			t.Cleanup(func() {
+				openCodeHomeDir, lookPathCommand, execCommand = origHomeDir, origLookPath, origExecCommand
+			})
+
+			home := t.TempDir()
+			opencodeDir := filepath.Join(home, ".config", "opencode")
+			if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			pkg := "opencode-subagent-statusline"
+			pkgDir := filepath.Join(opencodeDir, "node_modules", pkg)
+			if tc.manifest != "" {
+				if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(tc.manifest), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.registerOnly {
+				if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["`+pkg+`"]}`), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			openCodeHomeDir = func() (string, error) { return home, nil }
+			lookPathCommand = func(file string) (string, error) {
+				if file == "bun" {
+					return "/usr/bin/bun", nil
+				}
+				return "", errors.New("not found")
+			}
+			execCalled := false
+			execCommand = func(name string, args ...string) *exec.Cmd {
+				execCalled = true
+				return mockCmd("true")
+			}
+
+			outcome, err := runStrategyWithOutcome(context.Background(), update.UpdateResult{
+				Tool: update.ToolInfo{
+					Name:          pkg,
+					InstallMethod: update.InstallOpenCodePlugin,
+					NpmPackage:    pkg,
+				},
+				LatestVersion: tc.latestVersion,
+				Status:        update.UpdateAvailable,
+			}, system.PlatformProfile{})
+			if err == nil {
+				t.Fatal("expected verification failure after a successful package-manager command")
+			}
+			if outcome.observedVersion != "" {
+				t.Fatalf("observed version = %q, want empty on verification failure", outcome.observedVersion)
+			}
+			if hint, ok := AsManualFallback(err); ok != tc.wantFallback {
+				t.Fatalf("error = %T %v, ManualFallbackError = %t, want %t", err, err, ok, tc.wantFallback)
+			} else if ok && !strings.Contains(hint, tc.wantErrorParts[0]) {
+				t.Errorf("fallback hint %q does not contain %q", hint, tc.wantErrorParts[0])
+			}
+			if tc.wantFallback {
+				if execCalled {
+					t.Fatal("package manager must not run without a pinned expected version")
+				}
+				return
+			}
+			for _, want := range tc.wantErrorParts {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not contain %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+func TestRunStrategyOpenCodePluginRegisteredPendingRunsPackageManager(t *testing.T) {
+	origHomeDir := openCodeHomeDir
+	origLookPath := lookPathCommand
+	origExecCommand := execCommand
+	t.Cleanup(func() {
+		openCodeHomeDir = origHomeDir
+		lookPathCommand = origLookPath
+		execCommand = origExecCommand
+	})
+
+	home := t.TempDir()
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	pkg := "opencode-sdd-engram-manage"
+	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["opencode-sdd-engram-manage"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	openCodeHomeDir = func() (string, error) { return home, nil }
+	lookPathCommand = func(file string) (string, error) {
+		if file == "npm" {
+			return "/usr/bin/npm", nil
+		}
+		return "", errors.New("not found")
+	}
+	var gotName string
+	var gotArgs []string
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		gotName = name
+		gotArgs = append([]string(nil), args...)
+		pkgDir := filepath.Join(opencodeDir, "node_modules", pkg)
+		if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"version":"1.2.0"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return mockCmd("true")
+	}
+
+	_, err := runStrategy(context.Background(), update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          pkg,
+			InstallMethod: update.InstallOpenCodePlugin,
+			NpmPackage:    pkg,
+		},
+		LatestVersion: "1.2.0",
+		Status:        update.RegisteredNotMaterialized,
+	}, system.PlatformProfile{})
+	if err != nil {
+		t.Fatalf("registered OpenCode plugin should be npm-managed during upgrade, got: %v", err)
+	}
+	if gotName != "npm" {
+		t.Fatalf("exec name = %q, want npm", gotName)
+	}
+	wantArgs := []string{"install", "--save", "--no-audit", "--no-fund", pkg + "@1.2.0", "@opencode-ai/plugin@latest"}
+	if strings.Join(gotArgs, " ") != strings.Join(wantArgs, " ") {
+		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
+	}
+}
+
+func TestRunStrategyOpenCodePluginNpmERESOLVERetriesWithLegacyPeerDeps(t *testing.T) {
+	var callHistory [][]string
+	configureOpenCodeNpmTest(t, func(name string, args ...string) *exec.Cmd {
+		callHistory = append(callHistory, append([]string{name}, args...))
+		if len(callHistory) == 1 {
+			return failingCmd("npm error code ERESOLVE\nnpm error ERESOLVE could not resolve")
+		}
+		return mockCmd("true")
+	})
+
+	readStderr, writeStderr, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	origStderr := os.Stderr
+	os.Stderr = writeStderr
+	t.Cleanup(func() { os.Stderr = origStderr })
+
+	_, upgradeErr := runStrategy(context.Background(), openCodePluginUpdateResult("opencode-sdd-engram-manage"), system.PlatformProfile{})
+	os.Stderr = origStderr
+	if err := writeStderr.Close(); err != nil {
+		t.Fatal(err)
+	}
+	warning, err := io.ReadAll(readStderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := readStderr.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if upgradeErr != nil {
+		t.Fatalf("unexpected error on retry: %v", upgradeErr)
+	}
+	if !strings.Contains(string(warning), "WARNING:") || !strings.Contains(string(warning), "--legacy-peer-deps") {
+		t.Fatalf("stderr = %q, want visible legacy peer dependency warning", warning)
+	}
+	if len(callHistory) != 2 {
+		t.Fatalf("expected 2 exec calls (initial + retry), got %d", len(callHistory))
+	}
+	wantRetry := []string{"npm", "install", "--save", "--no-audit", "--no-fund", "--legacy-peer-deps", "opencode-sdd-engram-manage@1.2.0", "@opencode-ai/plugin@latest"}
+	if strings.Join(callHistory[1], " ") != strings.Join(wantRetry, " ") {
+		t.Fatalf("retry command = %v, want %v", callHistory[1], wantRetry)
+	}
+}
+
+func TestRunStrategyOpenCodePluginNpmERESOLVERetryFailurePreservesBothErrors(t *testing.T) {
+	configureOpenCodeNpmTest(t, func(name string, args ...string) *exec.Cmd {
+		if slicesContain(args, "--legacy-peer-deps") {
+			return failingCmd("retry failed")
+		}
+		return failingCmd("npm error code ERESOLVE\noriginal conflict")
+	})
+
+	_, err := runStrategy(context.Background(), openCodePluginUpdateResult("opencode-sdd-engram-manage"), system.PlatformProfile{})
+	if err == nil {
+		t.Fatal("expected retry failure")
+	}
+	for _, want := range []string{"retry failed", "original conflict", "original error", "retry with --legacy-peer-deps failed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not contain %q", err, want)
+		}
+	}
+}
+
+func TestRunStrategyOpenCodePluginNpmNonERESOLVEDoesNotRetry(t *testing.T) {
+	calls := 0
+	configureOpenCodeNpmTest(t, func(name string, args ...string) *exec.Cmd {
+		calls++
+		return failingCmd("npm error package code ERESOLVE helper failed")
+	})
+
+	_, err := runStrategy(context.Background(), openCodePluginUpdateResult("opencode-sdd-engram-manage"), system.PlatformProfile{})
+	if err == nil {
+		t.Fatal("expected npm failure")
+	}
+	if calls != 1 {
+		t.Fatalf("exec calls = %d, want 1 without retry", calls)
+	}
+}
+
+func TestRunStrategyOpenCodePluginNpmERESOLVEDoesNotRetryAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var callHistory [][]string
+	configureOpenCodeNpmTest(t, func(name string, args ...string) *exec.Cmd {
+		callHistory = append(callHistory, append([]string{name}, args...))
+		cancel()
+		return failingCmd("npm error code ERESOLVE")
+	})
+
+	_, err := runStrategy(ctx, openCodePluginUpdateResult("opencode-sdd-engram-manage"), system.PlatformProfile{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if len(callHistory) != 1 {
+		t.Fatalf("exec calls = %d, want 1 without retry", len(callHistory))
+	}
+	if slicesContain(callHistory[0], "--legacy-peer-deps") {
+		t.Fatalf("initial command unexpectedly includes --legacy-peer-deps: %v", callHistory[0])
+	}
+}
+
+func configureOpenCodeNpmTest(t *testing.T, command func(string, ...string) *exec.Cmd) {
+	t.Helper()
+	origHomeDir, origLookPath, origExecCommand := openCodeHomeDir, lookPathCommand, execCommand
+	t.Cleanup(func() {
+		openCodeHomeDir, lookPathCommand, execCommand = origHomeDir, origLookPath, origExecCommand
+	})
+	home := t.TempDir()
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["opencode-sdd-engram-manage"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pkgDir := filepath.Join(opencodeDir, "node_modules", "opencode-sdd-engram-manage")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"version":"1.2.0"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	openCodeHomeDir = func() (string, error) { return home, nil }
+	lookPathCommand = func(file string) (string, error) {
+		if file == "npm" {
+			return file, nil
+		}
+		return "", errors.New("not found")
+	}
+	execCommand = command
+}
+
+func openCodePluginUpdateResult(pkg string) update.UpdateResult {
+	return update.UpdateResult{Tool: update.ToolInfo{Name: pkg, InstallMethod: update.InstallOpenCodePlugin, NpmPackage: pkg}, LatestVersion: "1.2.0", Status: update.RegisteredNotMaterialized}
+}
+
+func slicesContain(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func failingCmd(output string) *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		return exec.Command("cmd", "/c", "echo "+strings.ReplaceAll(output, "\n", " & echo ")+" & exit /b 1")
+	}
+	return exec.Command("sh", "-c", "printf '%s\\n' \"$1\"; exit 1", "sh", output)
+}
+
+func TestRunStrategyOpenCodePluginFallsBackWithoutPackageManager(t *testing.T) {
+	origHomeDir := openCodeHomeDir
+	origLookPath := lookPathCommand
+	origExecCommand := execCommand
+	t.Cleanup(func() {
+		openCodeHomeDir = origHomeDir
+		lookPathCommand = origLookPath
+		execCommand = origExecCommand
+	})
+
+	home := t.TempDir()
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	pkg := "opencode-sdd-engram-manage"
+	if err := os.MkdirAll(filepath.Join(opencodeDir, "node_modules", pkg), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	openCodeHomeDir = func() (string, error) { return home, nil }
+	lookPathCommand = func(file string) (string, error) { return "", errors.New("not found") }
+	execCalled := false
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		execCalled = true
+		return mockCmd("echo", "should not run")
+	}
+
+	_, err := runStrategy(context.Background(), update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          pkg,
+			InstallMethod: update.InstallOpenCodePlugin,
+			NpmPackage:    pkg,
+		},
+	}, system.PlatformProfile{})
+	if err == nil {
+		t.Fatal("expected manual fallback when bun/npm are unavailable, got nil")
+	}
+	if !containsAny(err.Error(), "bun", "npm", "package manager") {
+		t.Fatalf("fallback should mention missing package manager, got: %v", err)
+	}
+	if execCalled {
+		t.Fatal("OpenCode plugin fallback should not run a package manager when none is available")
+	}
+}
+
+func TestSelectOpenCodePackageManagerPrefersPackageMetadata(t *testing.T) {
+	origLookPath := lookPathCommand
+	t.Cleanup(func() { lookPathCommand = origLookPath })
+
+	opencodeDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(opencodeDir, "package.json"), []byte(`{"packageManager":"npm@10.8.0"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lookPathCommand = func(file string) (string, error) {
+		switch file {
+		case "bun", "npm":
+			return filepath.Join("/usr/bin", file), nil
+		default:
+			return "", errors.New("not found")
+		}
+	}
+
+	pm, err := selectOpenCodePackageManager(opencodeDir)
+	if err != nil {
+		t.Fatalf("selectOpenCodePackageManager: unexpected error: %v", err)
+	}
+	if pm != "npm" {
+		t.Fatalf("package manager = %q, want npm from package.json metadata", pm)
+	}
+}
+
+func TestOpenCodePluginUpgradeHelperProcess(t *testing.T) {
+	if os.Getenv("GENTLE_AI_UPGRADE_HELPER") != "1" {
+		return
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		_, _ = os.Stderr.WriteString(err.Error())
+		os.Exit(2)
+	}
+	if err := os.WriteFile(os.Getenv("GENTLE_AI_UPGRADE_HELPER_CWD_FILE"), []byte(cwd), 0o644); err != nil {
+		_, _ = os.Stderr.WriteString(err.Error())
+		os.Exit(2)
+	}
+	if manifestPath := os.Getenv("GENTLE_AI_UPGRADE_HELPER_MANIFEST_PATH"); manifestPath != "" {
+		version := os.Getenv("GENTLE_AI_UPGRADE_HELPER_MANIFEST_VERSION")
+		if err := os.WriteFile(manifestPath, []byte(`{"version":"`+version+`"}`), 0o644); err != nil {
+			_, _ = os.Stderr.WriteString(err.Error())
+			os.Exit(2)
+		}
+	}
+	os.Exit(0)
 }
 
 func containsAny(s string, subs ...string) bool {
@@ -326,23 +1088,26 @@ func TestBrewUpgrade_RunsUpdateBeforeUpgrade(t *testing.T) {
 		if name == "brew" && len(args) > 0 {
 			callOrder = append(callOrder, args[0]) // "update" or "upgrade"
 		}
-		return exec.Command("echo", "ok")
+		return mockCmd("echo", "ok")
 	}
 
-	err := brewUpgrade(context.Background(), "conpas-ai")
+	err := brewUpgrade(context.Background(), update.UpdateResult{Tool: update.ToolInfo{Name: "gentle-ai"}}, update.HomebrewFormula)
 	if err != nil {
 		t.Fatalf("brewUpgrade: unexpected error: %v", err)
 	}
 
-	// Must have called brew update AND brew upgrade — in that order.
-	if len(callOrder) < 2 {
-		t.Fatalf("expected 2 brew calls (update, upgrade), got %d: %v", len(callOrder), callOrder)
+	// Must have called brew tap, scoped trust, brew update AND brew upgrade — in that order.
+	if len(callOrder) < 4 {
+		t.Fatalf("expected 4 brew calls (tap, trust, update, upgrade), got %d: %v", len(callOrder), callOrder)
 	}
-	if callOrder[0] != "update" {
-		t.Errorf("first brew call = %q, want %q", callOrder[0], "update")
+	if callOrder[1] != "trust" {
+		t.Errorf("second brew call = %q, want %q", callOrder[1], "trust")
 	}
-	if callOrder[1] != "upgrade" {
-		t.Errorf("second brew call = %q, want %q", callOrder[1], "upgrade")
+	if callOrder[2] != "update" {
+		t.Errorf("third brew call = %q, want %q", callOrder[2], "update")
+	}
+	if callOrder[3] != "upgrade" {
+		t.Errorf("fourth brew call = %q, want %q", callOrder[3], "upgrade")
 	}
 }
 
@@ -360,28 +1125,156 @@ func TestBrewUpgrade_UpdateFailureIsNonFatal(t *testing.T) {
 			callArgs = append(callArgs, args[0])
 			if args[0] == "update" {
 				// brew update fails (e.g. no network).
-				return exec.Command("false")
+				return mockCmd("false")
 			}
 		}
 		// brew upgrade succeeds.
-		return exec.Command("echo", "Upgraded gentle-ai")
+		return mockCmd("echo", "Upgraded gentle-ai")
 	}
 
-	err := brewUpgrade(context.Background(), "conpas-ai")
+	err := brewUpgrade(context.Background(), update.UpdateResult{Tool: update.ToolInfo{Name: "gentle-ai"}}, update.HomebrewFormula)
 	// brew update failed but brew upgrade succeeded → overall success.
 	if err != nil {
 		t.Errorf("expected success when brew update fails but brew upgrade succeeds, got: %v", err)
 	}
 
-	// Both brew update and brew upgrade must have been called.
-	if len(callArgs) < 2 {
-		t.Fatalf("expected 2 brew calls, got %d: %v", len(callArgs), callArgs)
+	// Brew trust, update, and upgrade must have been called (after the tap).
+	if len(callArgs) < 4 {
+		t.Fatalf("expected 4 brew calls, got %d: %v", len(callArgs), callArgs)
 	}
-	if callArgs[0] != "update" {
-		t.Errorf("first brew call = %q, want %q", callArgs[0], "update")
+	if callArgs[1] != "trust" {
+		t.Errorf("second brew call = %q, want %q", callArgs[1], "trust")
 	}
-	if callArgs[1] != "upgrade" {
-		t.Errorf("second brew call = %q, want %q", callArgs[1], "upgrade")
+	if callArgs[2] != "update" {
+		t.Errorf("third brew call = %q, want %q", callArgs[2], "update")
+	}
+	if callArgs[3] != "upgrade" {
+		t.Errorf("fourth brew call = %q, want %q", callArgs[3], "upgrade")
+	}
+}
+
+// --- TestBrewUpgrade_TapsBeforeUpdateAndUpgrade ---
+
+// TestBrewUpgrade_TapsAndTrustsBeforeUpdateAndUpgrade verifies that brewUpgrade calls
+// `brew tap Gentleman-Programming/homebrew-tap` and scoped artifact trust BEFORE
+// `brew update` and `brew upgrade <toolName>`. This makes the upgrade idempotent
+// when a user has lost the tap and works with Homebrew tap trust enforcement.
+func TestBrewUpgrade_TapsAndTrustsBeforeUpdateAndUpgrade(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+
+	type call struct {
+		subcommand string
+		args       []string
+	}
+	var calls []call
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "brew" && len(args) > 0 {
+			c := call{subcommand: args[0], args: append([]string(nil), args[1:]...)}
+			calls = append(calls, c)
+		}
+		if name == "engram" {
+			return mockCmd("echo", "engram 1.2.3")
+		}
+		return mockCmd("echo", "ok")
+	}
+
+	if err := brewUpgrade(context.Background(), update.UpdateResult{Tool: update.ToolInfo{Name: "engram", DetectCmd: []string{"engram", "version"}}, LatestVersion: "1.2.3"}, update.HomebrewCask); err != nil {
+		t.Fatalf("brewUpgrade: unexpected error: %v", err)
+	}
+
+	if len(calls) < 4 {
+		t.Fatalf("expected 4 brew calls (tap, trust, update, upgrade), got %d: %+v", len(calls), calls)
+	}
+	if calls[0].subcommand != "tap" {
+		t.Errorf("first brew call subcommand = %q, want %q", calls[0].subcommand, "tap")
+	}
+	if len(calls[0].args) != 1 || calls[0].args[0] != "Gentleman-Programming/homebrew-tap" {
+		t.Errorf("first brew call args = %v, want [Gentleman-Programming/homebrew-tap]", calls[0].args)
+	}
+	if calls[1].subcommand != "trust" {
+		t.Errorf("second brew call = %q, want %q", calls[1].subcommand, "trust")
+	}
+	if len(calls[1].args) != 2 || calls[1].args[0] != "--cask" || calls[1].args[1] != "gentleman-programming/tap/engram" {
+		t.Errorf("second brew call args = %v, want [--cask gentleman-programming/tap/engram]", calls[1].args)
+	}
+	if calls[2].subcommand != "update" {
+		t.Errorf("third brew call = %q, want %q", calls[2].subcommand, "update")
+	}
+	if calls[3].subcommand != "upgrade" {
+		t.Errorf("fourth brew call = %q, want %q", calls[3].subcommand, "upgrade")
+	}
+}
+
+func TestBrewUpgrade_FormulaToolUsesFormulaTrust(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+
+	var trustArgs []string
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "brew" && len(args) > 0 && args[0] == "trust" {
+			trustArgs = append([]string(nil), args[1:]...)
+		}
+		return mockCmd("echo", "ok")
+	}
+
+	if err := brewUpgrade(context.Background(), update.UpdateResult{Tool: update.ToolInfo{Name: "gentle-ai"}}, update.HomebrewFormula); err != nil {
+		t.Fatalf("brewUpgrade: unexpected error: %v", err)
+	}
+
+	if len(trustArgs) != 2 || trustArgs[0] != "--formula" || trustArgs[1] != "gentleman-programming/tap/gentle-ai" {
+		t.Fatalf("brew trust args = %v, want [--formula gentleman-programming/tap/gentle-ai]", trustArgs)
+	}
+}
+
+func TestHomebrewFailureAdviceTapTrust(t *testing.T) {
+	output := `Error: Refusing to load formula gentleman-programming/tap/gentle-ai from untrusted tap.
+Run brew trust --formula gentleman-programming/tap/gentle-ai to trust it.`
+	advice := homebrewFailureAdvice("gentle-ai", output)
+	for _, want := range []string{
+		"brew trust --formula gentleman-programming/tap/gentle-ai",
+		"brew upgrade --formula gentle-ai",
+	} {
+		if !strings.Contains(advice, want) {
+			t.Fatalf("tap trust advice missing %q:\n%s", want, advice)
+		}
+	}
+}
+
+func TestHomebrewFailureAdviceCaskTapTrust(t *testing.T) {
+	output := `Error: Refusing to load cask gentleman-programming/tap/engram from untrusted tap.
+Run brew trust --cask gentleman-programming/tap/engram to trust it.`
+	advice := homebrewFailureAdvice("engram", output)
+	for _, want := range []string{
+		"brew trust --cask gentleman-programming/tap/engram",
+		"brew upgrade --cask engram",
+	} {
+		if !strings.Contains(advice, want) {
+			t.Fatalf("cask tap trust advice missing %q:\n%s", want, advice)
+		}
+	}
+	if strings.Contains(advice, "--formula") {
+		t.Fatalf("cask tap trust advice must not suggest --formula:\n%s", advice)
+	}
+}
+
+func TestHomebrewFailureAdviceBubblewrap(t *testing.T) {
+	output := `Error: Bubblewrap is installed but cannot create a rootless sandbox.
+Homebrew's Linux sandbox requires rootless Bubblewrap and unprivileged user namespaces.`
+	advice := homebrewFailureAdvice("gentle-ai", output)
+	if strings.Contains(strings.ToLower(advice), "preferred fix") {
+		t.Fatalf("bubblewrap advice must not frame host policy changes as preferred defaults:\n%s", advice)
+	}
+	for _, want := range []string{
+		"explicit admin/security decision",
+		"sudo sysctl -w kernel.unprivileged_userns_clone=1",
+		"sudo sysctl -w user.max_user_namespaces=28633",
+		"sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true",
+		"HOMEBREW_NO_SANDBOX_LINUX=1 brew upgrade --formula gentle-ai",
+	} {
+		if !strings.Contains(advice, want) {
+			t.Fatalf("bubblewrap advice missing %q:\n%s", want, advice)
+		}
 	}
 }
 
@@ -391,7 +1284,7 @@ func TestRunStrategy_ExecErrorWrapped(t *testing.T) {
 	t.Cleanup(func() { execCommand = origExecCommand })
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("false")
+		return mockCmd("false")
 	}
 
 	r := update.UpdateResult{
@@ -403,7 +1296,7 @@ func TestRunStrategy_ExecErrorWrapped(t *testing.T) {
 	}
 	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew"}
 
-	err := runStrategy(context.Background(), r, profile)
+	_, err := runStrategy(context.Background(), r, profile)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -443,8 +1336,8 @@ func TestRunStrategy_ScriptUpgradeSuccess(t *testing.T) {
 	scriptHTTPClient = server.Client()
 
 	// Override installScriptURL to point to our test server.
-	installScriptURLFn = func(owner, repo string) string {
-		return server.URL + "/install.sh"
+	installScriptURLFn = func(owner, repo, version string) (string, error) {
+		return server.URL + "/install.sh", nil
 	}
 
 	var gotScriptContent string
@@ -453,7 +1346,7 @@ func TestRunStrategy_ScriptUpgradeSuccess(t *testing.T) {
 		if name == "bash" && len(args) >= 2 && args[0] == "-c" {
 			gotScriptContent = args[1]
 		}
-		return exec.Command("echo", "ok")
+		return mockCmd("echo", "ok")
 	}
 
 	r := update.UpdateResult{
@@ -493,8 +1386,8 @@ func TestRunStrategy_ScriptUpgradeDownloadFailure(t *testing.T) {
 	}))
 	defer server.Close()
 	scriptHTTPClient = server.Client()
-	installScriptURLFn = func(owner, repo string) string {
-		return server.URL + "/install.sh"
+	installScriptURLFn = func(owner, repo, version string) (string, error) {
+		return server.URL + "/install.sh", nil
 	}
 
 	r := update.UpdateResult{
@@ -523,7 +1416,7 @@ func TestRunStrategy_ScriptUpgradeWindowsManualFallback(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
-		return exec.Command("echo", "should not run")
+		return mockCmd("echo", "should not run")
 	}
 
 	r := update.UpdateResult{
@@ -547,12 +1440,258 @@ func TestRunStrategy_ScriptUpgradeWindowsManualFallback(t *testing.T) {
 	}
 }
 
+// --- TestGGAScriptUpgradeUsesGitClone ---
+
+// TestGGAScriptUpgradeUsesGitClone verifies that ggaScriptUpgrade:
+// 1. First calls `git clone --depth=1 --branch v<version> <repo-url> <tmpDir>`
+// 2. Then calls `bash <path-to-install.sh>`
+// — not `bash -c <script-content>` like the generic scriptUpgrade.
+// The clone is pinned to the target release tag so that install.sh matches the
+// version being upgraded to, not whatever is on main at upgrade time.
+func TestGGAScriptUpgradeUsesGitClone(t *testing.T) {
+	origExecCommand := execCommand
+	origDetectOS := detectOS
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		detectOS = origDetectOS
+	})
+	detectOS = func() string { return "linux" }
+
+	type call struct {
+		name string
+		args []string
+	}
+	var calls []call
+
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		calls = append(calls, call{name: name, args: args})
+		return mockCmd("echo", "ok")
+	}
+
+	r := update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          "gga",
+			Owner:         "Gentleman-Programming",
+			Repo:          "gentleman-guardian-angel",
+			InstallMethod: update.InstallScript,
+		},
+		LatestVersion: "2.8.0",
+	}
+
+	err := ggaScriptUpgrade(context.Background(), r)
+	if err != nil {
+		t.Fatalf("ggaScriptUpgrade: unexpected error: %v", err)
+	}
+
+	// Must have at least 4 exec calls (git init, git fetch, git checkout, bash install.sh).
+	if len(calls) < 4 {
+		t.Fatalf("expected at least 4 exec calls (git init + fetch + checkout + bash install.sh), got %d: %v", len(calls), calls)
+	}
+
+	// First call: git init
+	if calls[0].name != "git" || len(calls[0].args) == 0 || calls[0].args[0] != "init" {
+		t.Errorf("first exec call = %v, want git init", calls[0])
+	}
+
+	// Second call: git -C <dir> fetch --depth=1 <repoURL> refs/tags/v2.8.0:refs/tags/v2.8.0
+	fetchArgs := calls[1].args
+	foundRepoURL := false
+	foundTagRef := false
+	for _, a := range fetchArgs {
+		if containsAny(a, "gentleman-guardian-angel") {
+			foundRepoURL = true
+		}
+		if a == "refs/tags/v2.8.0:refs/tags/v2.8.0" {
+			foundTagRef = true
+		}
+	}
+	if !foundRepoURL {
+		t.Errorf("git fetch args %v should include the repo URL (gentleman-guardian-angel)", fetchArgs)
+	}
+	if !foundTagRef {
+		t.Errorf("git fetch args %v should include refs/tags/v2.8.0:refs/tags/v2.8.0 to pin to the release tag", fetchArgs)
+	}
+
+	// Third call: git -C <dir> checkout -f refs/tags/v2.8.0
+	checkoutArgs := calls[2].args
+	foundCheckoutTag := false
+	for _, a := range checkoutArgs {
+		if a == "refs/tags/v2.8.0" {
+			foundCheckoutTag = true
+		}
+	}
+	if !foundCheckoutTag {
+		t.Errorf("git checkout args %v should include refs/tags/v2.8.0", checkoutArgs)
+	}
+
+	// Fourth call must be `bash <path-to-install.sh>` (not bash -c <content>).
+	if calls[3].name != "bash" {
+		t.Errorf("fourth exec call name = %q, want %q", calls[3].name, "bash")
+	}
+	if len(calls[3].args) == 0 {
+		t.Fatalf("fourth exec call has no args")
+	}
+	installScriptArg := calls[3].args[0]
+	if !containsAny(installScriptArg, "install.sh") {
+		t.Errorf("bash arg = %q, want path containing install.sh", installScriptArg)
+	}
+	// Must NOT be bash -c (inline script content) — must be a file path.
+	if installScriptArg == "-c" {
+		t.Errorf("bash was called with -c (inline script), expected a file path to install.sh")
+	}
+}
+
+// --- TestGGAScriptUpgradeWindowsManualFallback ---
+
+// TestGGAScriptUpgradeWindowsManualFallback verifies that on Windows,
+// ggaScriptUpgrade returns a ManualFallbackError without calling exec.
+func TestGGAScriptUpgradeWindowsManualFallback(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+
+	execCalled := false
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		execCalled = true
+		return mockCmd("echo", "should not run")
+	}
+
+	r := update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          "gga",
+			Owner:         "Gentleman-Programming",
+			Repo:          "gentleman-guardian-angel",
+			InstallMethod: update.InstallScript,
+		},
+		LatestVersion: "2.8.0",
+	}
+
+	err := ggaScriptUpgradeForOS(context.Background(), r, "windows")
+	if err == nil {
+		t.Errorf("expected ManualFallbackError for Windows, got nil")
+	}
+	var mfe *ManualFallbackError
+	if !errors.As(err, &mfe) {
+		t.Errorf("expected *ManualFallbackError, got %T: %v", err, err)
+	}
+	if execCalled {
+		t.Errorf("exec should NOT be called on Windows for ggaScriptUpgrade")
+	}
+}
+
+// --- TestRunStrategy_GGAUsesGitClone ---
+
+// TestRunStrategy_GGAUsesGitClone verifies that when runStrategy is called with
+// a GGA tool (InstallScript), it routes to ggaScriptUpgrade (git clone approach)
+// rather than the generic scriptUpgrade (bash -c <content>).
+func TestRunStrategy_GGAUsesGitClone(t *testing.T) {
+	origExecCommand := execCommand
+	origDetectOS := detectOS
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		detectOS = origDetectOS
+	})
+	detectOS = func() string { return "linux" }
+
+	type call struct {
+		name string
+		args []string
+	}
+	var calls []call
+
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		calls = append(calls, call{name: name, args: args})
+		return mockCmd("echo", "ok")
+	}
+
+	r := update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          "gga",
+			Owner:         "Gentleman-Programming",
+			Repo:          "gentleman-guardian-angel",
+			InstallMethod: update.InstallScript,
+		},
+		LatestVersion: "2.8.0",
+	}
+	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
+
+	_, err := runStrategy(context.Background(), r, profile)
+	if err != nil {
+		t.Fatalf("runStrategy GGA: unexpected error: %v", err)
+	}
+
+	// Must have used git init + fetch (not bash -c).
+	if len(calls) < 4 {
+		t.Fatalf("expected at least 4 calls (git init + fetch + checkout + bash), got %d: %v", len(calls), calls)
+	}
+	if calls[0].name != "git" || (len(calls[0].args) > 0 && calls[0].args[0] != "init") {
+		t.Errorf("expected first call to be `git init`, got: %q %v", calls[0].name, calls[0].args)
+	}
+}
+
 // --- TestInstallScriptURL ---
 
 func TestInstallScriptURL(t *testing.T) {
-	url := installScriptURL("Gentleman-Programming", "gentleman-guardian-angel")
-	if url != "https://raw.githubusercontent.com/Gentleman-Programming/gentleman-guardian-angel/main/install.sh" {
-		t.Errorf("installScriptURL = %q, want correct raw GitHub URL", url)
+	tests := []struct {
+		name        string
+		owner       string
+		repo        string
+		version     string
+		wantURL     string
+		wantErr     bool
+		wantContain string
+	}{
+		{
+			name:        "pins to release tag",
+			owner:       "Gentleman-Programming",
+			repo:        "gentleman-guardian-angel",
+			version:     "1.31.0",
+			wantURL:     "https://raw.githubusercontent.com/Gentleman-Programming/gentleman-guardian-angel/v1.31.0/install.sh",
+			wantContain: "v1.31.0",
+		},
+		{
+			name:    "empty version returns error",
+			owner:   "Gentleman-Programming",
+			repo:    "gentle-ai",
+			version: "",
+			wantErr: true,
+		},
+		{
+			name:    "whitespace-only version returns error",
+			owner:   "Gentleman-Programming",
+			repo:    "gentle-ai",
+			version: "   ",
+			wantErr: true,
+		},
+		{
+			name:        "does not reference main",
+			owner:       "Gentleman-Programming",
+			repo:        "gentle-ai",
+			version:     "2.0.0",
+			wantContain: "v2.0.0",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			url, err := installScriptURL(tc.owner, tc.repo, tc.version)
+			if tc.wantErr {
+				if err == nil {
+					t.Errorf("installScriptURL(%q, %q, %q): want error, got nil (url=%q)", tc.owner, tc.repo, tc.version, url)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("installScriptURL(%q, %q, %q): unexpected error: %v", tc.owner, tc.repo, tc.version, err)
+			}
+			if tc.wantURL != "" && url != tc.wantURL {
+				t.Errorf("installScriptURL = %q, want %q", url, tc.wantURL)
+			}
+			if tc.wantContain != "" && !containsAny(url, tc.wantContain) {
+				t.Errorf("installScriptURL = %q, want it to contain %q", url, tc.wantContain)
+			}
+			if containsAny(url, "/main/") {
+				t.Errorf("installScriptURL = %q must NOT reference /main/", url)
+			}
+		})
 	}
 }
 
@@ -572,7 +1711,7 @@ func TestEngramUpgradeUsesDownloadNotGoInstall(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
-		return exec.Command("echo", "should not be called")
+		return mockCmd("echo", "should not be called")
 	}
 
 	downloadCalled := false
@@ -592,7 +1731,7 @@ func TestEngramUpgradeUsesDownloadNotGoInstall(t *testing.T) {
 	}
 	profile := system.PlatformProfile{OS: "windows", PackageManager: "winget"}
 
-	err := runStrategy(context.Background(), r, profile)
+	_, err := runStrategy(context.Background(), r, profile)
 	if err != nil {
 		t.Fatalf("runStrategy engram windows: unexpected error: %v", err)
 	}
@@ -621,7 +1760,7 @@ func TestEngramUpgradeLinuxUsesDownload(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
-		return exec.Command("echo", "should not be called")
+		return mockCmd("echo", "should not be called")
 	}
 
 	downloadCalled := false
@@ -641,7 +1780,7 @@ func TestEngramUpgradeLinuxUsesDownload(t *testing.T) {
 	}
 	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
 
-	err := runStrategy(context.Background(), r, profile)
+	_, err := runStrategy(context.Background(), r, profile)
 	if err != nil {
 		t.Fatalf("runStrategy engram linux: unexpected error: %v", err)
 	}
@@ -672,12 +1811,12 @@ func TestRunStrategy_ScriptUpgradeExecFailure(t *testing.T) {
 	}))
 	defer server.Close()
 	scriptHTTPClient = server.Client()
-	installScriptURLFn = func(owner, repo string) string {
-		return server.URL + "/install.sh"
+	installScriptURLFn = func(owner, repo, version string) (string, error) {
+		return server.URL + "/install.sh", nil
 	}
 
 	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("false")
+		return mockCmd("false")
 	}
 
 	r := update.UpdateResult{
@@ -694,5 +1833,90 @@ func TestRunStrategy_ScriptUpgradeExecFailure(t *testing.T) {
 	err := scriptUpgrade(context.Background(), r, profile)
 	if err == nil {
 		t.Errorf("expected error when install.sh execution fails, got nil")
+	}
+}
+
+// --- TestEngramBinaryUpgrade_ChannelRouting (Slice 3) ---
+
+// TestEngramBinaryUpgrade_StableChannelCallsDownloadFn verifies that when
+// GENTLE_AI_CHANNEL is unset or "stable", engramBinaryUpgrade delegates to
+// engramDownloadFn (the release-download path) and NOT go install @main.
+func TestEngramBinaryUpgrade_StableChannelCallsDownloadFn(t *testing.T) {
+	tests := []struct {
+		name   string
+		envVal string
+	}{
+		{name: "channel unset", envVal: ""},
+		{name: "channel explicit stable", envVal: "stable"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("GENTLE_AI_CHANNEL", tt.envVal)
+
+			origDownloadFn := engramDownloadFn
+			origExecCommand := execCommand
+			t.Cleanup(func() {
+				engramDownloadFn = origDownloadFn
+				execCommand = origExecCommand
+			})
+
+			downloadCalled := false
+			engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+				downloadCalled = true
+				return "/tmp/engram", nil
+			}
+
+			// go install must NOT be called for stable channel.
+			execCommand = func(name string, args ...string) *exec.Cmd {
+				t.Errorf("execCommand called unexpectedly for stable channel: %s %v", name, args)
+				return mockCmd("echo", "unexpected")
+			}
+
+			profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
+			err := engramBinaryUpgrade(profile)
+			if err != nil {
+				t.Fatalf("engramBinaryUpgrade stable: unexpected error: %v", err)
+			}
+			if !downloadCalled {
+				t.Error("expected engramDownloadFn to be called for stable channel, but it was not")
+			}
+		})
+	}
+}
+
+// TestEngramBinaryUpgrade_BetaChannelUsesGoInstallMain verifies that when
+// GENTLE_AI_CHANNEL=beta, engramBinaryUpgrade delegates to
+// engramBetaInstallFn (the consolidated beta path, backed by
+// engram.DownloadLatestBinary(profile, true) in production). The stable
+// engramDownloadFn must NOT be called.
+func TestEngramBinaryUpgrade_BetaChannelUsesGoInstallMain(t *testing.T) {
+	t.Setenv("GENTLE_AI_CHANNEL", "beta")
+
+	origDownloadFn := engramDownloadFn
+	origBetaFn := engramBetaInstallFn
+	t.Cleanup(func() {
+		engramDownloadFn = origDownloadFn
+		engramBetaInstallFn = origBetaFn
+	})
+
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		t.Error("engramDownloadFn (stable path) must NOT be called for beta channel")
+		return "", nil
+	}
+
+	var betaCalled bool
+	engramBetaInstallFn = func(profile system.PlatformProfile) (string, error) {
+		betaCalled = true
+		return "/tmp/engram-beta", nil
+	}
+
+	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
+	err := engramBinaryUpgrade(profile)
+	if err != nil {
+		t.Fatalf("engramBinaryUpgrade beta: unexpected error: %v", err)
+	}
+	if !betaCalled {
+		t.Fatal("expected engramBetaInstallFn (beta path) to be called, but it was not")
 	}
 }

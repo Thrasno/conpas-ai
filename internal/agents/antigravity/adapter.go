@@ -5,8 +5,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/Thrasno/conpas-ai/internal/model"
-	"github.com/Thrasno/conpas-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 type statResult struct {
@@ -24,6 +25,23 @@ func NewAdapter() *Adapter {
 	}
 }
 
+// antigravityVariantDir retains Gentle AI's legacy settings/skills selection.
+func (a *Adapter) antigravityVariantDir(homeDir string) string {
+	desktop := filepath.Join(homeDir, ".gemini", "antigravity-desktop")
+	if stat := a.statPath(desktop); stat.err == nil {
+		return desktop
+	}
+	return filepath.Join(homeDir, ".gemini", "antigravity-cli")
+}
+
+func (a *Adapter) antigravityRoot(homeDir string) string {
+	return filepath.Join(homeDir, ".gemini", "antigravity")
+}
+
+func (a *Adapter) migratedMarker(homeDir string) string {
+	return filepath.Join(homeDir, ".gemini", "config", ".migrated")
+}
+
 // --- Identity ---
 
 func (a *Adapter) Agent() model.AgentID {
@@ -37,25 +55,23 @@ func (a *Adapter) Tier() model.SupportTier {
 // --- Detection ---
 
 func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, string, bool, error) {
-	configPath := filepath.Join(homeDir, ".gemini", "antigravity")
-
-	stat := a.statPath(configPath)
-	if stat.err != nil {
-		if os.IsNotExist(stat.err) {
-			return false, "", configPath, false, nil
+	configPath := a.GlobalConfigDir(homeDir)
+	for _, evidence := range []string{a.antigravityRoot(homeDir), a.migratedMarker(homeDir), a.antigravityVariantDir(homeDir)} {
+		stat := a.statPath(evidence)
+		if stat.err == nil {
+			return true, "", configPath, true, nil
 		}
-		return false, "", "", false, stat.err
+		if !os.IsNotExist(stat.err) {
+			return false, "", "", false, stat.err
+		}
 	}
-
-	// Antigravity is a desktop IDE — no binary on PATH to detect.
-	// If config dir exists, it's installed.
-	return stat.isDir, "", configPath, stat.isDir, nil
+	return false, "", configPath, false, nil
 }
 
 // --- Installation ---
 
-func (a *Adapter) SupportsAutoInstall() bool {
-	return false // Desktop IDE — cannot install via CLI.
+func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifest {
+	return capabilitymanifest.MustForAgent(model.AgentAntigravity)
 }
 
 func (a *Adapter) InstallCommand(_ system.PlatformProfile) ([][]string, error) {
@@ -65,7 +81,16 @@ func (a *Adapter) InstallCommand(_ system.PlatformProfile) ([][]string, error) {
 // --- Config paths ---
 
 func (a *Adapter) GlobalConfigDir(homeDir string) string {
-	return filepath.Join(homeDir, ".gemini", "antigravity")
+	if stat := a.statPath(a.migratedMarker(homeDir)); stat.err == nil {
+		return filepath.Join(homeDir, ".gemini", "config")
+	}
+	if stat := a.statPath(a.antigravityRoot(homeDir)); stat.err == nil {
+		return a.antigravityRoot(homeDir)
+	}
+	if stat := a.statPath(a.antigravityVariantDir(homeDir)); stat.err == nil {
+		return a.antigravityVariantDir(homeDir)
+	}
+	return a.antigravityRoot(homeDir)
 }
 
 func (a *Adapter) SystemPromptDir(homeDir string) string {
@@ -77,11 +102,11 @@ func (a *Adapter) SystemPromptFile(homeDir string) string {
 }
 
 func (a *Adapter) SkillsDir(homeDir string) string {
-	return filepath.Join(homeDir, ".gemini", "antigravity", "skills")
+	return filepath.Join(a.antigravityVariantDir(homeDir), "skills")
 }
 
 func (a *Adapter) SettingsPath(homeDir string) string {
-	return filepath.Join(homeDir, ".gemini", "antigravity", "settings.json")
+	return filepath.Join(a.antigravityVariantDir(homeDir), "settings.json")
 }
 
 // --- Config strategies ---
@@ -97,13 +122,13 @@ func (a *Adapter) MCPStrategy() model.MCPStrategy {
 // --- MCP ---
 
 func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
-	return filepath.Join(homeDir, ".gemini", "antigravity", "mcp_config.json")
+	return filepath.Join(a.antigravityVariantDir(homeDir), "mcp_config.json")
 }
 
 // --- Optional capabilities ---
 
 func (a *Adapter) SupportsOutputStyles() bool {
-	return false
+	return a.CapabilityManifest().Features.OutputStyles
 }
 
 func (a *Adapter) OutputStyleDir(_ string) string {
@@ -111,32 +136,43 @@ func (a *Adapter) OutputStyleDir(_ string) string {
 }
 
 func (a *Adapter) SupportsSlashCommands() bool {
-	return false
+	return a.CapabilityManifest().Features.SlashCommands
 }
 
 func (a *Adapter) CommandsDir(_ string) string {
 	return ""
 }
 
+func (a *Adapter) SupportsSubAgents() bool {
+	return a.CapabilityManifest().Features.FileSubAgents
+}
+
+func (a *Adapter) SubAgentsDir(_ string) string {
+	return ""
+}
+
+func (a *Adapter) EmbeddedSubAgentsDir() string {
+	return ""
+}
+
 func (a *Adapter) SupportsSkills() bool {
-	return true
+	return a.CapabilityManifest().Features.Skills
 }
 
 func (a *Adapter) SupportsSystemPrompt() bool {
-	return true
+	return a.CapabilityManifest().Features.SystemPrompt
 }
 
 func (a *Adapter) SupportsMCP() bool {
-	return true
+	return a.CapabilityManifest().Features.MCP
 }
 
-// AgentNotInstallableError is returned when InstallCommand is called on a desktop-only agent.
 type AgentNotInstallableError struct {
 	Agent model.AgentID
 }
 
 func (e AgentNotInstallableError) Error() string {
-	return "agent " + string(e.Agent) + " is a desktop IDE and cannot be installed via CLI"
+	return "agent " + string(e.Agent) + " is managed by Antigravity and cannot be auto-installed"
 }
 
 func defaultStat(path string) statResult {

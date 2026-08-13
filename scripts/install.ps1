@@ -1,43 +1,35 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    gentle-ai — Install Script for Windows
-    One command to configure any AI coding agent on any OS.
+    Gentle-AI source installer for Windows.
 
 .DESCRIPTION
-    Downloads and installs the gentle-ai binary for Windows.
-    Supports installation via Go or pre-built binary from GitHub Releases.
+    Installs Gentle AI from source with Go. Official Windows binary distribution
+    and Scoop are temporarily unavailable until public-trust Authenticode signing
+    is enforced. Accepted channels: stable (default), beta, nightly.
 
 .EXAMPLE
-    # Run directly:
-    irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex
-
-    # Or download and run:
-    Invoke-WebRequest -Uri https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 -OutFile install.ps1
     .\install.ps1
 
-    # Force a specific method:
+.EXAMPLE
+    .\install.ps1 -Method go -Channel beta
+
+.EXAMPLE
+    # The legacy binary method fails closed with source-install guidance.
     .\install.ps1 -Method binary
-    .\install.ps1 -Method go
 #>
 
-[CmdletBinding()]
-param(
-    [ValidateSet("auto", "go", "binary")]
-    [string]$Method = "auto",
-
-    [string]$InstallDir = ""
-)
-
 $ErrorActionPreference = "Stop"
+
+# Ensure UTF-8 output so Unicode characters render correctly on all terminals.
+$null = & chcp 65001 2>$null
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 
 $GITHUB_OWNER = "Gentleman-Programming"
 $GITHUB_REPO = "gentle-ai"
 $BINARY_NAME = "gentle-ai"
-
-# ============================================================================
-# Logging helpers
-# ============================================================================
+$WINDOWS_DISTRIBUTION_HOLD = "Windows binary distribution and Scoop are temporarily unavailable until publicly trusted Authenticode signing is enforced."
+$STABLE_SOURCE_COMMAND = "go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest"
 
 function Write-Info    { param([string]$Message) Write-Host "[info]    $Message" -ForegroundColor Blue }
 function Write-Success { param([string]$Message) Write-Host "[ok]      $Message" -ForegroundColor Green }
@@ -51,10 +43,6 @@ function Stop-WithError {
     exit 1
 }
 
-# ============================================================================
-# Banner
-# ============================================================================
-
 function Show-Banner {
     Write-Host ""
     Write-Host "   ____            _   _              _    ___ " -ForegroundColor Cyan
@@ -63,75 +51,57 @@ function Show-Banner {
     Write-Host " | |_| |  __/ | | | |_| |  __/_____/ ___ \ | | " -ForegroundColor Cyan
     Write-Host "  \____|\___|_| |_|\__|_|\___|    /_/   \_\___|" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "  One command to configure any AI coding agent on any OS" -ForegroundColor DarkGray
+    Write-Host "  Gentle-AI - Ecosystem, Frameworks, Workflows" -ForegroundColor DarkGray
     Write-Host ""
 }
 
-# ============================================================================
-# Platform detection
-# ============================================================================
-
 function Get-Platform {
     Write-Step "Detecting platform"
-
-    $arch = if ([Environment]::Is64BitOperatingSystem) {
-        if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
-    } else {
+    if (-not [Environment]::Is64BitOperatingSystem) {
         Stop-WithError "32-bit Windows is not supported."
     }
-
+    $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
     Write-Success "Platform: Windows ($arch)"
-    return $arch
 }
-
-# ============================================================================
-# Prerequisites
-# ============================================================================
 
 function Test-Prerequisites {
     Write-Step "Checking prerequisites"
-
-    $missing = @()
-    if (-not (Get-Command "curl" -ErrorAction SilentlyContinue)) { $missing += "curl" }
-    if (-not (Get-Command "git" -ErrorAction SilentlyContinue))  { $missing += "git" }
-
-    if ($missing.Count -gt 0) {
-        Stop-WithError "Missing required tools: $($missing -join ', '). Please install them and try again."
+    if (-not (Get-Command "go" -ErrorAction SilentlyContinue)) {
+        Stop-WithError "$WINDOWS_DISTRIBUTION_HOLD Install Go 1.25.10 or newer, then run: $STABLE_SOURCE_COMMAND"
     }
-
-    Write-Success "curl and git are available"
+    Write-Success "Go is available"
 }
-
-# ============================================================================
-# Install method detection
-# ============================================================================
 
 function Get-InstallMethod {
-    param([string]$Forced)
+    param([string]$Forced, [string]$Channel)
 
-    if ($Forced -ne "auto") {
-        Write-Info "Using forced method: $Forced"
-        return $Forced
+    if ($Forced -eq "binary") {
+        Stop-WithError "$WINDOWS_DISTRIBUTION_HOLD No unsigned binary will be downloaded or executed. Install from source with Go 1.25.10 or newer: $STABLE_SOURCE_COMMAND"
     }
-
-    Write-Step "Detecting best install method"
-
-    # Prefer binary download over go install: GitHub Releases are instant
-    # while the Go module proxy can lag behind new tags for up to 30 minutes,
-    # causing `go install ...@latest` to install a stale version.
-    Write-Info "Will download pre-built binary from GitHub Releases"
-    return "binary"
+    if ($Channel -eq "beta") {
+        Write-Info "Using beta channel - installing $BINARY_NAME from main via go install"
+    } else {
+        Write-Info "Using source installation via go install"
+    }
+    return "go"
 }
 
-# ============================================================================
-# Install via go install
-# ============================================================================
-
 function Install-ViaGo {
-    Write-Step "Installing via go install"
+    param([string]$Channel = "stable")
 
-    $goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/cmd/$BINARY_NAME@latest"
+    Write-Step "Installing via go install"
+    $version = if ($Channel -eq "beta") { "main" } else { "latest" }
+    # /v2 is part of the module path, not decoration: Go refuses to resolve a
+    # module whose tags are v2.x unless the import path carries the major
+    # version suffix.
+    $goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/v2/cmd/$BINARY_NAME@$version"
     Write-Info "Running: go install $goPackage"
+
+    if ($Channel -eq "beta") {
+        Add-GoEnvPattern -Name "GONOSUMDB" -Pattern "github.com/gentleman-programming/gentle-ai/v2"
+        Add-GoEnvPattern -Name "GOPRIVATE" -Pattern "github.com/gentleman-programming/gentle-ai/v2"
+        Add-GoEnvPattern -Name "GONOPROXY" -Pattern "github.com/gentleman-programming/gentle-ai/v2"
+    }
 
     & go install $goPackage
     if ($LASTEXITCODE -ne 0) {
@@ -143,206 +113,95 @@ function Install-ViaGo {
         $gopath = & go env GOPATH 2>$null
         $gobin = Join-Path $gopath "bin"
     }
-
     if ($env:PATH -notlike "*$gobin*") {
         Write-Warn "$gobin is not in your PATH"
         Write-Warn "Add it to your PATH environment variable."
     }
-
-    Write-Success "Installed $BINARY_NAME via go install"
+    Write-Success "Installed $BINARY_NAME from source via go install"
 }
 
-# ============================================================================
-# Install via binary download
-# ============================================================================
+function Add-GoEnvPattern {
+    param(
+        [string]$Name,
+        [string]$Pattern
+    )
 
-function Get-LatestVersion {
-    Write-Info "Fetching latest release from GitHub..."
-
-    $url = "https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/releases/latest"
-
-    try {
-        $response = Invoke-RestMethod -Uri $url -Headers @{ "User-Agent" = "gentle-ai-installer" }
-    } catch {
-        Stop-WithError "Failed to fetch latest release. Rate limited? Try again later or use -Method go"
-    }
-
-    $version = $response.tag_name
-    if (-not $version) {
-        Stop-WithError "Could not determine latest version from GitHub API response"
-    }
-
-    Write-Success "Latest version: $version"
-    return $version
-}
-
-function Install-ViaBinary {
-    param([string]$Arch)
-
-    Write-Step "Installing pre-built binary"
-
-    $version = Get-LatestVersion
-    $versionNumber = $version.TrimStart("v")
-
-    $archiveName = "${BINARY_NAME}_${versionNumber}_windows_${Arch}.zip"
-    $downloadUrl = "https://github.com/$GITHUB_OWNER/$GITHUB_REPO/releases/download/$version/$archiveName"
-    $checksumsUrl = "https://github.com/$GITHUB_OWNER/$GITHUB_REPO/releases/download/$version/checksums.txt"
-
-    $tmpDir = Join-Path $env:TEMP "gentle-ai-install-$(Get-Random)"
-    New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
-
-    try {
-        # Download archive
-        Write-Info "Downloading $archiveName..."
-        $archivePath = Join-Path $tmpDir $archiveName
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $archivePath -UseBasicParsing
-
-        $fileSize = (Get-Item $archivePath).Length
-        if ($fileSize -lt 1000) {
-            Stop-WithError "Downloaded file is suspiciously small ($fileSize bytes). Archive may not exist for this platform."
-        }
-        Write-Success "Downloaded $archiveName ($fileSize bytes)"
-
-        # Verify checksum
-        Write-Info "Verifying checksum..."
-        try {
-            $checksumsPath = Join-Path $tmpDir "checksums.txt"
-            Invoke-WebRequest -Uri $checksumsUrl -OutFile $checksumsPath -UseBasicParsing
-
-            $checksums = Get-Content $checksumsPath
-            $expectedLine = $checksums | Where-Object { $_ -match $archiveName }
-            if ($expectedLine) {
-                $expectedChecksum = ($expectedLine -split "\s+")[0]
-                $actualChecksum = (Get-FileHash -Path $archivePath -Algorithm SHA256).Hash.ToLower()
-
-                if ($actualChecksum -ne $expectedChecksum) {
-                    Stop-WithError "Checksum mismatch!`n  Expected: $expectedChecksum`n  Got:      $actualChecksum"
-                }
-                Write-Success "Checksum verified"
-            } else {
-                Write-Warn "Archive not found in checksums.txt - skipping verification"
-            }
-        } catch {
-            Write-Warn "Could not download checksums.txt - skipping verification"
-        }
-
-        # Extract binary
-        Write-Info "Extracting $BINARY_NAME..."
-        Expand-Archive -Path $archivePath -DestinationPath $tmpDir -Force
-
-        $binaryPath = Join-Path $tmpDir "$BINARY_NAME.exe"
-        if (-not (Test-Path $binaryPath)) {
-            Stop-WithError "Binary '$BINARY_NAME.exe' not found in archive"
-        }
-
-        # Determine install directory
-        $installDir = $InstallDir
-        if (-not $installDir) {
-            $installDir = Join-Path $env:LOCALAPPDATA "gentle-ai\bin"
-        }
-
-        if (-not (Test-Path $installDir)) {
-            New-Item -ItemType Directory -Path $installDir -Force | Out-Null
-        }
-
-        # Install binary
-        $destPath = Join-Path $installDir "$BINARY_NAME.exe"
-        Write-Info "Installing to $destPath..."
-        Copy-Item -Path $binaryPath -Destination $destPath -Force
-
-        Write-Success "Installed $BINARY_NAME to $destPath"
-
-        # Check if install dir is in PATH
-        if ($env:PATH -notlike "*$installDir*") {
-            Write-Warn "$installDir is not in your PATH"
-            Write-Host ""
-            Write-Warn "Run this to add it permanently:"
-            Write-Host "  [Environment]::SetEnvironmentVariable('PATH', `$env:PATH + ';$installDir', 'User')" -ForegroundColor DarkGray
-            Write-Host ""
-        }
-    } finally {
-        Remove-Item -Path $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
-    }
-}
-
-# ============================================================================
-# Verify installation
-# ============================================================================
-
-function Test-Installation {
-    Write-Step "Verifying installation"
-
-    # Refresh PATH for current session
-    $env:PATH = [Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [Environment]::GetEnvironmentVariable("PATH", "User")
-
-    $cmd = Get-Command $BINARY_NAME -ErrorAction SilentlyContinue
-    if ($cmd) {
-        $versionOutput = & $BINARY_NAME version 2>&1
-        Write-Success "$BINARY_NAME is installed: $versionOutput"
+    $current = [Environment]::GetEnvironmentVariable($Name, "Process")
+    if (-not $current) {
+        Set-Item -Path "Env:$Name" -Value $Pattern
         return
     }
 
-    # Check common locations
-    $gopath = $null
-    if (Get-Command "go" -ErrorAction SilentlyContinue) {
-        $gopath = & go env GOPATH 2>$null
-    }
-    $locations = @(
-        (Join-Path $env:LOCALAPPDATA "gentle-ai\bin\$BINARY_NAME.exe")
-    )
-    if ($gopath) {
-        $locations += (Join-Path $gopath "bin\$BINARY_NAME.exe")
-    }
-
-    foreach ($loc in $locations) {
-        if ($loc -and (Test-Path $loc)) {
-            $versionOutput = & $loc version 2>&1
-            Write-Success "Found $BINARY_NAME at $loc`: $versionOutput"
-            Write-Warn "Binary location is not in your PATH. Add it to use '$BINARY_NAME' directly."
-            return
-        }
-    }
-
-    Write-Warn "Could not verify installation. You may need to restart your terminal."
+    $patterns = $current.Split(",", [System.StringSplitOptions]::RemoveEmptyEntries).Trim()
+    if ($patterns -contains $Pattern) { return }
+    Set-Item -Path "Env:$Name" -Value ("{0},{1}" -f $Pattern, $current)
 }
 
-# ============================================================================
-# Next steps
-# ============================================================================
+function Test-Installation {
+    Write-Step "Verifying installation"
+    $gobin = & go env GOBIN 2>$null
+    if (-not $gobin) {
+        $gopath = & go env GOPATH 2>$null
+        $gobin = Join-Path $gopath "bin"
+    }
+    $binaryPath = Join-Path $gobin "$BINARY_NAME.exe"
+    if (-not (Test-Path $binaryPath)) {
+        Write-Warn "Could not verify $binaryPath. Check go env GOBIN and go env GOPATH."
+        return
+    }
+
+    $env:GENTLE_AI_NO_SELF_UPDATE = "1"
+    $versionOutput = & $binaryPath --version 2>&1
+    Remove-Item Env:GENTLE_AI_NO_SELF_UPDATE -ErrorAction SilentlyContinue
+    Write-Success "$BINARY_NAME installed at $binaryPath`: $versionOutput"
+}
 
 function Show-NextSteps {
+    param([string]$Channel = "stable")
+
     Write-Host ""
     Write-Host "Installation complete!" -ForegroundColor Green
     Write-Host ""
-    Write-Host "Next steps:" -ForegroundColor White
-    Write-Host "  1. Run '$BINARY_NAME' to start the TUI installer" -ForegroundColor Cyan
-    Write-Host "  2. Select your AI agent(s) and tools to configure" -ForegroundColor Cyan
-    Write-Host "  3. Follow the interactive prompts" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "For help: $BINARY_NAME --help" -ForegroundColor DarkGray
-    Write-Host "Docs:     https://github.com/$GITHUB_OWNER/$GITHUB_REPO" -ForegroundColor DarkGray
+    if ($Channel -eq "beta") {
+        Write-Host ('  Run ''$env:GENTLE_AI_CHANNEL = "beta"; {0} install'' to keep using the beta channel' -f $BINARY_NAME) -ForegroundColor Cyan
+    } else {
+        Write-Host "  Run '$BINARY_NAME' to start the TUI installer" -ForegroundColor Cyan
+    }
+    Write-Host "Docs: https://github.com/$GITHUB_OWNER/$GITHUB_REPO" -ForegroundColor DarkGray
     Write-Host ""
 }
-
-# ============================================================================
-# Main
-# ============================================================================
 
 function Main {
+    [CmdletBinding()]
+    param(
+        [ValidateSet("auto", "go", "binary")]
+        [string]$Method = "auto",
+
+        [ValidateSet("stable", "beta", "nightly")]
+        [string]$Channel = $(if ($env:GENTLE_AI_CHANNEL) { $env:GENTLE_AI_CHANNEL } else { "stable" }),
+
+        [string]$InstallDir = "",
+
+        [switch]$Insecure
+    )
+
     Show-Banner
-
-    $arch = Get-Platform
-    Test-Prerequisites
-
-    $installMethod = Get-InstallMethod -Forced $Method
-
-    switch ($installMethod) {
-        "go"     { Install-ViaGo }
-        "binary" { Install-ViaBinary -Arch $arch }
+    if ($Insecure) {
+        Stop-WithError "$WINDOWS_DISTRIBUTION_HOLD The legacy -Insecure switch cannot bypass this policy. $STABLE_SOURCE_COMMAND"
     }
+    if ($InstallDir) {
+        Stop-WithError "-InstallDir is unavailable for source installation. Configure go env GOBIN instead."
+    }
+    if ($Channel -eq "nightly") { $Channel = "beta" }
 
+    $installMethod = Get-InstallMethod -Forced $Method -Channel $Channel
+    Get-Platform
+    Test-Prerequisites
+    if ($installMethod -eq "go") {
+        Install-ViaGo -Channel $Channel
+    }
     Test-Installation
-    Show-NextSteps
+    Show-NextSteps -Channel $Channel
 }
 
-Main
+Main @args

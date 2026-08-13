@@ -1,90 +1,73 @@
 package cli
 
 import (
+	"strings"
 	"testing"
 
-	"github.com/Thrasno/conpas-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
-// TestNormalizePersonaBackwardCompat verifies that "gentleman" input is silently
-// mapped to "argentino" so existing scripts and config files continue to work.
-func TestNormalizePersonaBackwardCompat(t *testing.T) {
-	got, err := normalizePersona("gentleman")
-	if err != nil {
-		t.Fatalf("normalizePersona(%q) unexpected error = %v", "gentleman", err)
-	}
-	if got != model.PersonaArgentino {
-		t.Errorf("normalizePersona(%q) = %q, want %q", "gentleman", got, model.PersonaArgentino)
-	}
-}
-
-// TestNormalizePersonaAllVariants verifies that all 7 standard personas and custom pass through.
-func TestNormalizePersonaAllVariants(t *testing.T) {
-	cases := []struct {
-		input string
-		want  model.PersonaID
-	}{
-		{"argentino", model.PersonaArgentino},
-		{"neutral", model.PersonaNeutral},
-		{"galleguinho", model.PersonaGalleguinho},
-		{"asturianu", model.PersonaAsturianu},
-		{"sargentoDeHierro", model.PersonaSargentoDeHierro},
-		{"stark", model.PersonaStark},
-		{"littleYoda", model.PersonaLittleYoda},
-		{"custom", model.PersonaCustom},
-	}
-
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.input, func(t *testing.T) {
-			got, err := normalizePersona(tc.input)
-			if err != nil {
-				t.Fatalf("normalizePersona(%q) unexpected error = %v", tc.input, err)
-			}
-			if got != tc.want {
-				t.Errorf("normalizePersona(%q) = %q, want %q", tc.input, got, tc.want)
-			}
-		})
-	}
-}
-
-// TestNormalizePersonaEmptyDefaultsToArgentino verifies that empty string defaults to argentino.
-func TestNormalizePersonaEmptyDefaultsToArgentino(t *testing.T) {
-	got, err := normalizePersona("")
-	if err != nil {
-		t.Fatalf("normalizePersona(%q) unexpected error = %v", "", err)
-	}
-	if got != model.PersonaArgentino {
-		t.Errorf("normalizePersona(%q) = %q, want %q", "", got, model.PersonaArgentino)
-	}
-}
-
-// TestNormalizePersonaUnknownReturnsError verifies that invalid personas return an error.
-func TestNormalizePersonaUnknownReturnsError(t *testing.T) {
-	_, err := normalizePersona("pirate")
+// TestAsAgentIDsRejectsUnsupportedAgent closes install/sync surface audit
+// finding 3: asAgentIDs previously converted any string to a model.AgentID
+// without checking it was a real, supported agent, so a typo like
+// `--agent cluade` silently became a no-op instead of being rejected.
+func TestAsAgentIDsRejectsUnsupportedAgent(t *testing.T) {
+	_, err := asAgentIDs([]string{"cluade"})
 	if err == nil {
-		t.Fatalf("normalizePersona(%q) expected error, got nil", "pirate")
+		t.Fatal("asAgentIDs([]string{\"cluade\"}) error = nil, want an error naming the unsupported agent")
+	}
+	if !strings.Contains(err.Error(), "cluade") {
+		t.Fatalf("error = %q, want it to name the offending value %q", err.Error(), "cluade")
+	}
+	// The valid set must be enumerated from the canonical agent registry
+	// (catalog.AllAgents), not a hand-written list that can drift.
+	for _, agent := range catalog.AllAgents() {
+		if !strings.Contains(err.Error(), string(agent.ID)) {
+			t.Fatalf("error = %q, want it to enumerate canonical agent %q", err.Error(), agent.ID)
+		}
 	}
 }
 
-// TestNormalizePresetBackwardCompat verifies that "full-gentleman" maps to "full".
-func TestNormalizePresetBackwardCompat(t *testing.T) {
-	got, err := normalizePreset("full-gentleman")
-	if err != nil {
-		t.Fatalf("normalizePreset(%q) unexpected error = %v", "full-gentleman", err)
+// TestAsAgentIDsAcceptsEverySupportedAgent proves every canonical agent ID
+// round-trips cleanly through asAgentIDs.
+func TestAsAgentIDsAcceptsEverySupportedAgent(t *testing.T) {
+	var values []string
+	for _, agent := range catalog.AllAgents() {
+		values = append(values, string(agent.ID))
 	}
-	if got != model.PresetFull {
-		t.Errorf("normalizePreset(%q) = %q, want %q", "full-gentleman", got, model.PresetFull)
+	got, err := asAgentIDs(values)
+	if err != nil {
+		t.Fatalf("asAgentIDs() error = %v, want nil", err)
+	}
+	if len(got) != len(values) {
+		t.Fatalf("asAgentIDs() = %v, want %d agents", got, len(values))
 	}
 }
 
-// TestNormalizePresetFull verifies that "full" works directly.
-func TestNormalizePresetFull(t *testing.T) {
-	got, err := normalizePreset("full")
-	if err != nil {
-		t.Fatalf("normalizePreset(%q) unexpected error = %v", "full", err)
+// TestNormalizeInstallFlagsRejectsUnsupportedAgent proves the install path
+// (`gentle-ai install --agent <typo>`) rejects an unknown agent instead of
+// silently resolving to an empty agent list.
+func TestNormalizeInstallFlagsRejectsUnsupportedAgent(t *testing.T) {
+	_, err := NormalizeInstallFlags(InstallFlags{Agents: []string{"cluade"}}, system.DetectionResult{})
+	if err == nil {
+		t.Fatal("NormalizeInstallFlags() error = nil, want an error for an unsupported agent")
 	}
-	if got != model.PresetFull {
-		t.Errorf("normalizePreset(%q) = %q, want %q", "full", got, model.PresetFull)
+	if !strings.Contains(err.Error(), "cluade") {
+		t.Fatalf("error = %q, want it to name the offending value %q", err.Error(), "cluade")
+	}
+}
+
+// TestNormalizeInstallFlagsAcceptsSupportedAgent is the control case proving
+// the rejection above is specific to unsupported values, not a general
+// regression that blocks every --agent value.
+func TestNormalizeInstallFlagsAcceptsSupportedAgent(t *testing.T) {
+	input, err := NormalizeInstallFlags(InstallFlags{Agents: []string{"claude-code"}}, system.DetectionResult{})
+	if err != nil {
+		t.Fatalf("NormalizeInstallFlags() error = %v, want nil", err)
+	}
+	if len(input.Selection.Agents) != 1 || input.Selection.Agents[0] != model.AgentClaudeCode {
+		t.Fatalf("Selection.Agents = %v, want [claude-code]", input.Selection.Agents)
 	}
 }

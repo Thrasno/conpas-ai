@@ -3,16 +3,43 @@ package agents
 import (
 	"fmt"
 
-	"github.com/Thrasno/conpas-ai/internal/agents/antigravity"
-	"github.com/Thrasno/conpas-ai/internal/agents/claude"
-	"github.com/Thrasno/conpas-ai/internal/agents/codex"
-	cursoradapter "github.com/Thrasno/conpas-ai/internal/agents/cursor"
-	"github.com/Thrasno/conpas-ai/internal/agents/gemini"
-	"github.com/Thrasno/conpas-ai/internal/agents/opencode"
-	"github.com/Thrasno/conpas-ai/internal/agents/vscode"
-	"github.com/Thrasno/conpas-ai/internal/agents/windsurf"
-	"github.com/Thrasno/conpas-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/antigravity"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
+	cursoradapter "github.com/gentleman-programming/gentle-ai/v2/internal/agents/cursor"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/gemini"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/hermes"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kilocode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kimi"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kiro"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/openclaw"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/qwen"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/trae"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/windsurf"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
+
+var defaultAgentIDs = []model.AgentID{
+	model.AgentClaudeCode,
+	model.AgentOpenCode,
+	model.AgentKilocode,
+	model.AgentGeminiCLI,
+	model.AgentCursor,
+	model.AgentVSCodeCopilot,
+	model.AgentCodex,
+	model.AgentAntigravity,
+	model.AgentWindsurf,
+	model.AgentKimi,
+	model.AgentQwenCode,
+	model.AgentKiroIDE,
+	model.AgentOpenClaw,
+	model.AgentPi,
+	model.AgentTrae,
+	model.AgentHermes,
+}
 
 func NewAdapter(agent model.AgentID) (Adapter, error) {
 	switch agent {
@@ -20,6 +47,8 @@ func NewAdapter(agent model.AgentID) (Adapter, error) {
 		return claude.NewAdapter(), nil
 	case model.AgentOpenCode:
 		return opencode.NewAdapter(), nil
+	case model.AgentKilocode:
+		return kilocode.NewAdapter(), nil
 	case model.AgentGeminiCLI:
 		return gemini.NewAdapter(), nil
 	case model.AgentCursor:
@@ -32,24 +61,29 @@ func NewAdapter(agent model.AgentID) (Adapter, error) {
 		return antigravity.NewAdapter(), nil
 	case model.AgentWindsurf:
 		return windsurf.NewAdapter(), nil
+	case model.AgentKimi:
+		return kimi.NewAdapter(), nil
+	case model.AgentQwenCode:
+		return qwen.NewAdapter(), nil
+	case model.AgentKiroIDE:
+		return kiro.NewAdapter(), nil
+	case model.AgentOpenClaw:
+		return openclaw.NewAdapter(), nil
+	case model.AgentPi:
+		return pi.NewAdapter(), nil
+	case model.AgentTrae:
+		return trae.NewAdapter(), nil
+	case model.AgentHermes:
+		return hermes.NewAdapter(), nil
 	default:
 		return nil, AgentNotSupportedError{Agent: agent}
 	}
 }
 
 func NewDefaultRegistry() (*Registry, error) {
-	adapters := make([]Adapter, 0, 8)
+	adapters := make([]Adapter, 0, len(defaultAgentIDs))
 
-	for _, agent := range []model.AgentID{
-		model.AgentClaudeCode,
-		model.AgentOpenCode,
-		model.AgentGeminiCLI,
-		model.AgentCursor,
-		model.AgentVSCodeCopilot,
-		model.AgentCodex,
-		model.AgentAntigravity,
-		model.AgentWindsurf,
-	} {
+	for _, agent := range defaultAgentIDs {
 		adapter, err := NewAdapter(agent)
 		if err != nil {
 			return nil, fmt.Errorf("create %s adapter: %w", agent, err)

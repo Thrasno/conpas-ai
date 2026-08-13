@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/Thrasno/conpas-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 func TestDetect(t *testing.T) {
@@ -89,6 +89,24 @@ func TestDetect(t *testing.T) {
 	}
 }
 
+func TestAdapter_SubAgentCapability(t *testing.T) {
+	a := NewAdapter()
+
+	if got := a.SupportsSubAgents(); got != true {
+		t.Errorf("SupportsSubAgents() = %v, want true", got)
+	}
+
+	homeDir := "/home/test"
+	wantDir := filepath.Join(homeDir, ".claude", "agents")
+	if got := a.SubAgentsDir(homeDir); got != wantDir {
+		t.Errorf("SubAgentsDir(%q) = %q, want %q", homeDir, got, wantDir)
+	}
+
+	if got := a.EmbeddedSubAgentsDir(); got != "claude/agents" {
+		t.Errorf("EmbeddedSubAgentsDir() = %q, want %q", got, "claude/agents")
+	}
+}
+
 func TestInstallCommand(t *testing.T) {
 	a := NewAdapter()
 
@@ -100,17 +118,17 @@ func TestInstallCommand(t *testing.T) {
 		{
 			name:    "darwin profile uses npm without sudo",
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
-			want:    [][]string{{"npm", "install", "-g", "@anthropic-ai/claude-code"}},
+			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@latest"}},
 		},
 		{
 			name:    "ubuntu profile uses sudo npm",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
-			want:    [][]string{{"sudo", "npm", "install", "-g", "@anthropic-ai/claude-code"}},
+			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@latest"}},
 		},
 		{
 			name:    "arch profile uses sudo npm",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroArch, PackageManager: "pacman"},
-			want:    [][]string{{"sudo", "npm", "install", "-g", "@anthropic-ai/claude-code"}},
+			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@latest"}},
 		},
 	}
 
@@ -125,5 +143,19 @@ func TestInstallCommand(t *testing.T) {
 				t.Fatalf("InstallCommand() = %v, want %v", command, tt.want)
 			}
 		})
+	}
+}
+
+func TestSlashCommands(t *testing.T) {
+	a := NewAdapter()
+
+	if !a.SupportsSlashCommands() {
+		t.Fatal("SupportsSlashCommands() = false, want true")
+	}
+
+	got := a.CommandsDir("/home/u")
+	want := filepath.Join("/home/u", ".claude", "commands")
+	if got != want {
+		t.Fatalf("CommandsDir() = %q, want %q", got, want)
 	}
 }

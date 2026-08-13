@@ -1,313 +1,53 @@
 ---
 name: judgment-day
-description: >
-  Parallel adversarial review protocol that launches two independent blind judge sub-agents
-  simultaneously to review the same target, synthesizes their findings, applies fixes,
-  and re-judges until both pass or escalates after 2 iterations.
-  Trigger: When user says "judgment day", "judgment-day", "review adversarial", "dual review",
-  "doble review", "juzgar", "que lo juzguen".
+description: "Trigger: judgment day, dual review, adversarial review, juzgar. Run explicit blind dual review with at most two scoped fix/re-judgment rounds."
 license: Apache-2.0
 metadata:
   author: gentleman-programming
-  version: "1.3"
+  version: "1.7"
 ---
 
-## When to Use
+## Activation Contract
 
-- User explicitly asks for "judgment day", "judgment-day", or equivalent trigger phrases
-- After significant implementations before merging
-- When high-confidence review of code, features, or architecture is needed
-- When a single reviewer might miss edge cases or have blind spots
-- When the cost of a production bug is higher than the cost of two review rounds
+Load only when the user explicitly requests Judgment Day or equivalent dual/adversarial review for a concrete target. Judgment Day is a standalone developer tool: judges run whenever asked, on any runtime, and need no review transaction, runtime identity, or delivery-receipt machinery to start. It replaces ordinary 4R as the adversarial method for that target; never run both.
 
-## Critical Patterns
+## Hard Rules
 
-### Pattern 0: Skill Resolution (BEFORE launching judges)
+- Resolve matching project skills before starting and pass the same paths to both judges (`jd-judge-a`, `jd-judge-b`) and the fix actor (`jd-fix-agent`).
+- Build one complete immutable target, then launch two blind read-only judges in parallel with identical scope and criteria.
+- Each judge returns one neutral findings result and terminates. Wait for both; never accept a partial judgment.
+- Never launch `review-refuter`; two-judge agreement is the corroboration mechanism.
+- Only the parent orchestrator merges/persists findings, launches the fix actor (`jd-fix-agent`), and launches scoped re-judgment.
+- Fix only severe findings confirmed by both judges. WARNING/SUGGESTION rows remain `info`.
+- Permit at most two fix rounds and two scoped re-judgments. Re-judgment sees only the frozen ledger plus fix delta and may record fix-caused defects.
+- The only terminal verdicts are `APPROVED | ESCALATED`; never reset or extend an exhausted round budget.
+- A judgment issues no receipt and carries no delivery authority: it satisfies no commit, push, PR, or release gate. When the caller explicitly wants delivery authority for the same target, run the ordinary negotiated review lifecycle as its own step; a runtime that cannot uphold receipt guarantees loses the receipt, not the judgment.
 
-Follow the **Skill Resolver Protocol** (`_shared/skill-resolver.md`) before launching ANY sub-agent:
+## Decision Gates
 
-1. Obtain the skill registry: search engram (`mem_search(query: "skill-registry", project: "{project}")`) → fallback to `.atl/skill-registry.md` from the project root → skip if none
-2. Identify the target files/scope — what code will the judges review?
-3. Match relevant skills from the registry's **Compact Rules** by:
-   - **Code context**: file extensions/paths of the target (e.g., `.go` → go-testing; `.tsx` → react-19, typescript)
-   - **Task context**: "review code" → framework/language skills; "create PR" → branch-pr skill
-4. Build a `## Project Standards (auto-resolved)` block with the matching compact rules
-5. Inject this block into BOTH Judge prompts AND the Fix Agent prompt (identical for all)
+| Condition | Action |
+|---|---|
+| Target unclear | Ask one scope question and stop. |
+| Both judges confirm severe finding | Ask before round-one correction; then use the bounded fix actor. |
+| One judge reports it | Record suspect; do not auto-fix. |
+| Judges contradict | Escalate for explicit human decision. |
+| Scoped re-judgment fails before round two | Parent may launch the final bounded fix round. |
+| Any issue remains after round two | Escalate and stop. |
 
-This ensures judges review against project-specific standards, not just generic best practices.
+## Execution Steps
 
-**If no registry exists**: warn the user ("No skill registry found — judges will review without project-specific standards. Run `skill-registry` to fix this.") and proceed with generic review only.
+1. Build the complete immutable target and freeze the scope both judges will inspect.
+2. Launch both read-only judges in parallel (`jd-judge-a`, `jd-judge-b`) against the same immutable target.
+3. Merge findings into the frozen ledger and persist it through the selected artifact store.
+4. Ask before round-one correction; run the fix actor (`jd-fix-agent`) only for confirmed severe IDs.
+5. Run both judges again (`jd-judge-a`, `jd-judge-b`) only over the frozen ledger plus immutable fix delta.
+6. Repeat once at most, then run independent final verification and return the terminal verdict.
 
-### Pattern 1: Parallel Blind Review
+## Output Contract
 
-- Launch **TWO** sub-agents via `delegate` (async, parallel — never sequential)
-- Each agent receives the **same target** but works **independently**
-- **Neither agent knows about the other** — no cross-contamination
-- Both use identical review criteria but may find different issues
-- NEVER do the review yourself as the orchestrator — your job is coordination only
+Return target identity, round, confirmed/suspect/contradiction/INFO counts, correction work units, scoped re-judgment result, artifact references, skill resolution, and exactly one final `JUDGMENT: APPROVED ✅` or `JUDGMENT: ESCALATED ⚠️`.
 
-### Pattern 2: Verdict Synthesis
+## References
 
-The **orchestrator** (NOT a sub-agent) compares results after both `delegation_read` calls return:
-
-```
-Confirmed   → found by BOTH agents          → high confidence, fix immediately
-Suspect A   → found ONLY by Judge A         → needs triage
-Suspect B   → found ONLY by Judge B         → needs triage
-Contradiction → agents DISAGREE on the same thing → flag for manual decision
-```
-
-Present findings as a structured verdict table (see Output Format).
-
-### Pattern 3: Fix and Re-judge
-
-1. If **confirmed issues** exist → delegate a **Fix Agent** (separate delegation)
-2. After Fix Agent completes → re-launch **both judges in parallel** (same blind protocol, fresh delegates)
-3. **After 2 fix iterations**, if issues remain → present findings to user and ASK: "¿Querés que siga iterando? / Should I continue iterating?" If YES → continue fix+judge cycle. If NO → JUDGMENT: ESCALATED.
-4. If both judges return clean → JUDGMENT: APPROVED ✅
-
----
-
-## Decision Tree
-
-```
-User asks for "judgment day"
-│
-├── Target is specific files/feature/component?
-│   ├── YES → continue
-│   └── NO → ask user to specify scope before proceeding
-│
-▼
-Resolve skills (Pattern 0): read registry → match by code + task context → build Project Standards block
-▼
-Launch Judge A + Judge B in parallel (delegate, async) — with Project Standards injected
-▼
-Wait for both to complete (delegation_read both)
-▼
-Synthesize verdict
-│
-├── No issues found?
-│   └── JUDGMENT: APPROVED ✅ (stop here)
-│
-├── Issues found (confirmed, suspect, or contradictions)?
-│   └── Delegate Fix Agent with confirmed issues list
-│       ▼
-│       ⚠️  BLOCKING: Your NEXT action MUST be re-launching judges.
-│       ⚠️  Do NOT push, commit, or message the user.
-│       ▼
-│       Wait for Fix Agent to complete
-│       ▼
-│       Re-launch Judge A + Judge B in parallel (Round 2)
-│       ▼
-│       Synthesize verdict
-│       │
-│       ├── Clean → JUDGMENT: APPROVED ✅
-│       │
-│       └── Still issues → Delegate Fix Agent again (Round 3 / iteration 2)
-│           ▼
-│           Re-launch Judge A + Judge B in parallel (Round 3)
-│           ▼
-│           Synthesize verdict
-│           │
-│           ├── Clean → JUDGMENT: APPROVED ✅
-│           └── Still issues → ASK USER: "Issues remain after 2 iterations. Continue iterating?"
-            │
-            ├── User says YES → repeat fix + judge cycle (no limit)
-            └── User says NO → JUDGMENT: ESCALATED ⚠️ (report to user)
-```
-
----
-
-## Sub-Agent Prompt Templates
-
-### Judge Prompt (use for BOTH Judge A and Judge B — identical)
-
-```
-You are an adversarial code reviewer. Your ONLY job is to find problems.
-
-## Target
-{describe target: files, feature, architecture, component}
-
-{if compact rules were resolved in Pattern 0, inject the following block — otherwise OMIT this entire section}
-## Project Standards (auto-resolved)
-{paste matching compact rules blocks from the skill registry}
-
-## Review Criteria
-- Correctness: Does the code do what it claims? Are there logical errors?
-- Edge cases: What inputs or states aren't handled?
-- Error handling: Are errors caught, propagated, and logged properly?
-- Performance: Any N+1 queries, inefficient loops, unnecessary allocations?
-- Security: Any injection risks, exposed secrets, improper auth checks?
-- Naming & conventions: Does it follow the project's established patterns AND the Project Standards above?
-{if user provided custom criteria, add here}
-
-## Return Format
-Return a structured list of findings ONLY. No praise, no approval.
-
-Each finding:
-- Severity: CRITICAL | WARNING | SUGGESTION
-- File: path/to/file.ext (line N if applicable)
-- Description: What is wrong and why it matters
-- Suggested fix: one-line description of the fix (not code, just intent)
-
-Always include at the end: **Skill Resolution**: {injected|fallback-registry|fallback-path|none} — {details}
-
-If you find NO issues, return:
-VERDICT: CLEAN — No issues found.
-
-## Instructions
-Be thorough and adversarial. Assume the code has bugs until proven otherwise.
-Your job is to find problems, NOT to approve. Do not summarize. Do not praise.
-```
-
-### Fix Agent Prompt
-
-```
-You are a surgical fix agent. You apply ONLY the confirmed issues listed below.
-
-## Confirmed Issues to Fix
-{paste the confirmed findings table from the verdict synthesis}
-
-{if compact rules were resolved in Pattern 0, inject the following block — otherwise OMIT this entire section}
-## Project Standards (auto-resolved)
-{paste matching compact rules blocks from the skill registry}
-
-## Context
-- Original review criteria: {paste same criteria used for judges}
-- Target: {same target description}
-
-## Instructions
-- Fix ONLY the confirmed issues listed above
-- Do NOT refactor beyond what is strictly needed to fix each issue
-- Do NOT change code that was not flagged
-- After each fix, note: file changed, line changed, what was done
-
-Return a summary:
-## Fixes Applied
-- [file:line] — {what was fixed}
-
-**Skill Resolution**: {injected|fallback-registry|fallback-path|none} — {details}
-```
-
----
-
-## Output Format
-
-```markdown
-## Judgment Day — {target}
-
-### Round {N} — Verdict
-
-| Finding | Judge A | Judge B | Severity | Status |
-|---------|---------|---------|----------|--------|
-| Missing null check in auth.go:42 | ✅ | ✅ | CRITICAL | Confirmed |
-| Race condition in worker.go:88 | ✅ | ❌ | WARNING | Suspect (A only) |
-| Naming mismatch in handler.go:15 | ❌ | ✅ | SUGGESTION | Suspect (B only) |
-| Error swallowed in db.go:201 | ✅ | ✅ | CRITICAL | Confirmed |
-
-**Confirmed issues**: 2 CRITICAL
-**Suspect issues**: 1 WARNING, 1 SUGGESTION
-**Contradictions**: none
-
-### Fixes Applied (Round {N})
-- `auth.go:42` — Added nil check before dereferencing user pointer
-- `db.go:201` — Propagated error instead of silently returning nil
-
-### Round {N+1} — Re-judgment
-- Judge A: PASS ✅ — No issues found
-- Judge B: PASS ✅ — No issues found
-
----
-
-### JUDGMENT: APPROVED ✅
-Both judges pass clean. The target is cleared for merge.
-```
-
-### Escalation Format (user chose to stop)
-
-```markdown
-## Judgment Day — {target}
-
-### JUDGMENT: ESCALATED ⚠️
-
-User chose to stop after {N} fix iterations. Issues remain.
-Manual review required before proceeding.
-
-### Remaining Issues
-| Finding | Judge A | Judge B | Severity |
-|---------|---------|---------|----------|
-| {description} | ✅ | ✅ | CRITICAL |
-
-### History
-- Round 1: {N} confirmed issues found
-- Fix 1: applied {list}
-- Round 2: {N} issues remain
-- Fix 2: applied {list}
-- Round 3: {N} issues remain → escalated
-
-Recommend: human review of the remaining issues above before re-running judgment day.
-```
-
----
-
-## Skill Resolution Feedback
-
-After every delegation that returns a result, check the `**Skill Resolution**` field in each judge/fix-agent response:
-- `injected` → skills were passed correctly ✅
-- `fallback-registry`, `fallback-path`, or `none` → skill cache was lost (likely compaction). Re-read the registry immediately and inject compact rules in all subsequent delegations.
-
-This is a self-correction mechanism. Do NOT ignore fallback reports.
-
----
-
-## Language
-
-- **Spanish input → Rioplatense**: "Juicio iniciado", "Los jueces están trabajando en paralelo...", "Los jueces coinciden", "Juicio terminado — Aprobado", "Escalado — necesita revisión humana"
-- **English input**: "Judgment initiated", "Both judges are working in parallel...", "Both judges agree", "Judgment complete — Approved", "Escalated — requires human review"
-
----
-
-## Blocking Rules (MANDATORY — override all other instructions)
-
-These rules cannot be skipped, overridden, or deprioritized under any circumstances:
-
-1. **MUST NOT** declare `JUDGMENT: APPROVED` until Round 2 judges BOTH return CLEAN
-2. **MUST NOT** run `git push`, `git commit`, or any code-modifying action after fixes until re-judgment completes
-3. **MUST NOT** save a session summary or tell the user "done" until every JD reaches a terminal state (APPROVED or ESCALATED)
-4. **After the Fix Agent returns**, your IMMEDIATE next action is launching Round 2 judges in parallel. No other action (push, summary, user message) may come first.
-5. **When running multiple JDs in parallel**, each JD is independent. One JD completing does NOT allow skipping rounds on another.
-
----
-
-## Self-Check (before ANY terminal action)
-
-Before pushing, committing, summarizing, or telling the user "done":
-
-1. List every active JD target
-2. For each: is it in state APPROVED or ESCALATED?
-3. If ANY JD had fixes applied, did Round 2 run?
-4. If Round 2 found issues, did you ASK the user whether to continue? Did you respect their answer?
-
-**If ANY answer is "no"** → you skipped a step. Go back and complete it before proceeding.
-
----
-
-## Rules
-
-- The **orchestrator NEVER reviews code itself** — it only launches judges, reads results, and synthesizes
-- Judges MUST be launched as `delegate` (async) so they run in **parallel**
-- The **Fix Agent is a separate delegation** — never use one of the judges as the fixer
-- If user provides **custom review criteria**, include them in BOTH judge prompts (identical)
-- If target scope is **unclear**, stop and ask before launching — partial reviews are useless
-- **After 2 fix iterations**, ASK the user before continuing. Never escalate automatically — the user decides when to stop.
-- Always wait for BOTH judges to complete before synthesizing — never accept a partial verdict
-- Suspect findings (only one judge) are reported but NOT automatically fixed — triage and escalate to user if needed
-
----
-
-## Commands
-
-```bash
-# No CLI commands — this is a pure orchestration protocol.
-# Execution happens via delegate() and delegation_read() tool calls.
-```
+- [references/prompts-and-formats.md](references/prompts-and-formats.md) — compact judge/fix prompts and verdict shape.
+- [../_shared/review-ledger-contract.md](../_shared/review-ledger-contract.md) — delivery-authority route only: consult it when the caller explicitly opts into the ordinary negotiated review lifecycle; never required to run judges.

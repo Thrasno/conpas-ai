@@ -3,22 +3,31 @@ package screens
 import (
 	"strings"
 
-	"github.com/Thrasno/conpas-ai/internal/model"
-	"github.com/Thrasno/conpas-ai/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
 )
 
 func PresetOptions() []model.PresetID {
 	return []model.PresetID{
-		model.PresetFull,
+		model.PresetFullGentleman,
 		model.PresetEcosystemOnly,
 		model.PresetMinimal,
+		model.PresetCustom,
 	}
 }
 
 var presetDescriptions = map[model.PresetID]string{
-	model.PresetFull:          "Everything: memory, SDD, skills, docs, persona & security",
-	model.PresetEcosystemOnly: "Core tools only: memory, SDD, skills & docs (no persona/security)",
-	model.PresetMinimal:       "Just Engram persistent memory",
+	model.PresetMinimal:       "Just Engram persistent memory across sessions",
+	model.PresetEcosystemOnly: "Memory + SDD + skills + docs + GGA",
+	model.PresetFullGentleman: "Dev Stack plus managed themes and logo polish",
+	model.PresetCustom:        "Choose each component manually: memory, persona, themes, logo, and more",
+}
+
+var presetLabels = map[model.PresetID]string{
+	model.PresetMinimal:       "Memory Only",
+	model.PresetEcosystemOnly: "Dev Stack",
+	model.PresetFullGentleman: "Dev Stack + Polish",
+	model.PresetCustom:        "Custom",
 }
 
 func RenderPreset(selected model.PresetID, cursor int) string {
@@ -30,7 +39,7 @@ func RenderPreset(selected model.PresetID, cursor int) string {
 	for idx, preset := range PresetOptions() {
 		isSelected := preset == selected
 		focused := idx == cursor
-		b.WriteString(renderRadio(string(preset), isSelected, focused))
+		b.WriteString(renderRadio(presetLabels[preset], isSelected, focused))
 		b.WriteString(styles.SubtextStyle.Render("    "+presetDescriptions[preset]) + "\n")
 	}
 

@@ -1,9 +1,10 @@
 package system
 
 import (
+	"context"
+	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -19,6 +20,12 @@ import (
 func AddToUserPath(dir string) error {
 	if runtime.GOOS != "windows" {
 		// Still add to the current process PATH on non-Windows (harmless for callers).
+		return addToProcessPath(dir)
+	}
+	if runningInGoTest() {
+		// Go tests must not mutate the real Windows user PATH registry. Keep the
+		// test process behavior identical for callers that need the new directory
+		// available later in the same run.
 		return addToProcessPath(dir)
 	}
 
@@ -39,14 +46,80 @@ func AddToUserPath(dir string) error {
 	// 2. Persist via PowerShell: modifies the user-scoped PATH in the registry.
 	//    This change survives terminal restarts and applies to all future processes
 	//    for this user without requiring admin privileges.
+	//
+	//    escapePowerShellString replaces ' with '' (PowerShell's escape for single quotes
+	//    within single-quoted strings) to prevent injection via path names like C:\O'Brien.
+	safeDir := escapePowerShellString(dir)
 	script := fmt.Sprintf(
 		`$current = [Environment]::GetEnvironmentVariable('PATH', 'User'); `+
-			`if ($current -notlike '*%s*') { `+
+			`if (($current.Split(';')) -notcontains '%s') { `+
 			`[Environment]::SetEnvironmentVariable('PATH', '%s;' + $current, 'User') }`,
-		dir, dir,
+		safeDir, safeDir,
 	)
-	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
-	return cmd.Run()
+	_, err := NewPowerShellRunner().Run(context.Background(), "-NoProfile", "-NonInteractive", "-Command", script)
+	return err
+}
+
+// PrioritizeUserPath moves dir to the front of PATH for the current process and,
+// on Windows, the user-scoped persistent PATH. Existing entries are preserved;
+// only exact matches for dir are removed before the refreshed dir is prepended.
+func PrioritizeUserPath(dir string) error {
+	dir = strings.Trim(strings.TrimSpace(dir), `"`)
+	if dir == "" {
+		return nil
+	}
+
+	if err := prioritizeProcessPath(dir); err != nil {
+		return err
+	}
+	if runtime.GOOS != "windows" || runningInGoTest() {
+		return nil
+	}
+
+	safeDir := escapePowerShellString(dir)
+	script := fmt.Sprintf(
+		`$dir = '%s'; `+
+			`$current = [Environment]::GetEnvironmentVariable('PATH', 'User'); `+
+			`$entries = @(); `+
+			`if ($current) { $entries = $current.Split(';') | Where-Object { $_ -and ([string]::Compare($_.Trim('"'), $dir, $true) -ne 0) } }; `+
+			`[Environment]::SetEnvironmentVariable('PATH', ($dir + ';' + ($entries -join ';')).TrimEnd(';'), 'User')`,
+		safeDir,
+	)
+	_, err := NewPowerShellRunner().Run(context.Background(), "-NoProfile", "-NonInteractive", "-Command", script)
+	return err
+}
+
+// UserPathEntries returns the persistent user-scoped PATH entries for the given
+// platform. On Windows it reads the User PATH registry-backed environment value;
+// on other platforms it returns the current process PATH entries.
+func UserPathEntries(goos string) ([]string, error) {
+	if goos != "windows" {
+		return filepath.SplitList(os.Getenv("PATH")), nil
+	}
+
+	output, err := NewPowerShellRunner().Run(context.Background(), "-NoProfile", "-NonInteractive", "-Command", `[Environment]::GetEnvironmentVariable('PATH', 'User')`)
+	if err != nil {
+		return nil, err
+	}
+	return splitWindowsPath(strings.TrimSpace(string(output))), nil
+}
+
+func splitWindowsPath(value string) []string {
+	if value == "" {
+		return nil
+	}
+	return strings.Split(value, ";")
+}
+
+func runningInGoTest() bool {
+	return flag.Lookup("test.v") != nil
+}
+
+// escapePowerShellString escapes a string for safe use inside a PowerShell
+// single-quoted string literal by replacing each ' with ” (PowerShell's escape
+// sequence for a literal single quote within single-quoted strings).
+func escapePowerShellString(s string) string {
+	return PowerShellSingleQuoted(s)
 }
 
 // addToProcessPath prepends dir to the current process PATH if it is not already
@@ -65,4 +138,21 @@ func addToProcessPath(dir string) error {
 		return os.Setenv("PATH", dir)
 	}
 	return os.Setenv("PATH", dir+string(os.PathListSeparator)+currentPath)
+}
+
+func prioritizeProcessPath(dir string) error {
+	currentPath := os.Getenv("PATH")
+	if currentPath == "" {
+		return os.Setenv("PATH", dir)
+	}
+
+	entries := []string{dir}
+	for _, entry := range filepath.SplitList(currentPath) {
+		entry = strings.TrimSpace(entry)
+		if entry == "" || strings.EqualFold(filepath.Clean(entry), filepath.Clean(dir)) {
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	return os.Setenv("PATH", strings.Join(entries, string(os.PathListSeparator)))
 }

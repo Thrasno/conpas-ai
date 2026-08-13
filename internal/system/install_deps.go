@@ -57,7 +57,7 @@ func installHintNode(profile PlatformProfile) string {
 }
 
 // installHintNpm returns the platform-specific install hint for npm.
-func installHintNpm(profile PlatformProfile) string {
+func installHintNpm(_ PlatformProfile) string {
 	// npm comes with node on all platforms.
 	return "npm is included with node — install node first"
 }
@@ -82,6 +82,27 @@ func installHintGo(profile PlatformProfile) string {
 		return "sudo dnf install -y golang"
 	default:
 		return "install go from https://go.dev/dl/"
+	}
+}
+
+// InstallHintForDep returns the platform-specific human-readable install hint for
+// the named dependency. Returns an empty string for unknown dependency names.
+func InstallHintForDep(name string, profile PlatformProfile) string {
+	switch name {
+	case "git":
+		return installHintGit(profile)
+	case "curl":
+		return installHintCurl(profile)
+	case "node":
+		return installHintNode(profile)
+	case "npm":
+		return installHintNpm(profile)
+	case "brew":
+		return installHintBrew()
+	case "go":
+		return installHintGo(profile)
+	default:
+		return ""
 	}
 }
 

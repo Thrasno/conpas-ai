@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Thrasno/conpas-ai/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 )
 
 // TestPrepareBackupStep_InstallWritesMetadataToManifest verifies that when

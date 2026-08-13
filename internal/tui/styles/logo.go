@@ -6,29 +6,39 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// logoLines contains the ASCII art for the Conpas AI stylized N logo.
+// logoLines contains the ASCII art for the Gentle-AI neon rose logo.
 var logoLines = []string{
-	"                                                      ",
-	"         ███╗   ██╗                                   ",
-	"         ████╗  ██║                                   ",
-	"         ██╔██╗ ██║                                   ",
-	"         ██║╚██╗██║                                   ",
-	"         ██║ ╚████║                                   ",
-	"         ╚═╝  ╚═══╝                                   ",
-	"                                                      ",
+	"             ⣠⣾⣷⣶⣦⣤⣤⣄⣠⣄⣀  ⢀⣀⣀",
+	"          ⢀⣴⣿⣿⠿⣋⣭⣭⣯⣭⣍⣭⣿⣟⠛⠛⠿⠿⣿⣷⣄",
+	"      ⢀⣴⣾⡟⢻⣿⡟⠁⣼⣿⠏⣵⢻⣿⣻⣿⣿⢿⡻⣿⣿⣶⡌⢿⣿⣷⣦⣤⡄",
+	"   ⣤⣶⣾⣿⣿⠏ ⠈⢿⣄ ⢹⣏⠠⠟⣾⣿⣿⣿⣿⣿⠷⣏⣼⠟⢡⣿⡟⠋⢻⣿⣿⡄",
+	"   ⠈⣿⣿⣿⣿⡆   ⣽⢧⡘⠈⠳⣦⣍⠛⠛⢦⣉⣴⣛⣫⣭⣴⡟⠋  ⣾⣿⣿⡿",
+	"   ⢀⠹⣿⣿⣿⣷⣤⡄ ⠋ ⠙⢆ ⣠⠴⠟⠛⣛⣛⣛⠟⠋⠁⠺⡇ ⣀⣴⣿⣿⡟⠁",
+	"   ⠈⣀⠈⠛⠷⠿⣿⣿⣷⣤⣀ ⢠⠋   ⠈⠉⠉    ⣠⣴⣥⠾⠛⠉⣰⣿⣷",
+	"          ⠹⣯⣝⠛⠛⠷⢶⣤⣤⣀   ⢀⡠⠖⠋⠉⢉⣀⣀⣴⣾⣿⠿⠟⠃ ⠠⠦",
+	"⠁       ⠖  ⠘⠻⢿⣦⣄⡀  ⠉⠛⢦⠠⢊⠤⠴⢒⣛⣛⣩⣽⡿⠟⠁⢀⡀",
+	"⠲⠶⣦⠴⠶⠶⠶⠶⡶⠶⢶⣤⣄⡀⠨⠭⠽⠟⣓⢦⣀⠈⢇⡥⠖⠛⠋⠉⠉⠉    ⠈  ⢠⡤",
+	"  ⠈⢷ ⠐⠂⢤⣽⣄ ⠰⡎⠙⠳⣄⡀ ⠈⢣⠘⢦⠋⣀⡬⠟⠛⠛⠉⢀⣀⣀⣠⡤⠄⠃",
+	"   ⠈⢳⣀⡒⠉⠉⣉⠙⡲⣽⣄ ⣏⠳⡄ ⠘⡇ ⡾⠁ ⢀⡤⠖⣻⣿⡏⢡⡎ ⠰⠄",
+	"     ⠛⠻⢦⣄⣉⡁⣀⣀⣈⣙⣺⣌⡇⢠⢀⡇⡾  ⣴⣿⡷⠊ ⢲⣠⠟",
+	"          ⠈⠉    ⠈⠳⡄⣸⢱⠇⢀⣰⣯⣭⣥⠭⠾⠛⠃",
+	"                  ⡷⠡⡯⢖⠉   ⢠⠤",
+	"                ⡠⢊⡴⠤⠂⠃ ⠒",
+	"             ⢀⡴⢪⠔⣉⠔⠋",
+	"               ⠐⠈",
 }
 
 // gradientColors defines the top-to-bottom gradient for the logo.
-// Distributed across rows: Green/Cyan → Teal → Blue → Lavender → Mauve (cyan to purple).
+// Distributed across rows: neon rose → lavender → blue → teal → green.
 var gradientColors = []lipgloss.Color{
-	ColorGreen,    // band 1 (cyan/green top)
-	ColorTeal,     // band 2
-	ColorBlue,     // band 3 (middle blue)
-	ColorLavender, // band 4
-	ColorMauve,    // band 5 (purple bottom)
+	ColorMauve,    // band 1
+	ColorLavender, // band 2
+	ColorBlue,     // band 3
+	ColorTeal,     // band 4
+	ColorGreen,    // band 5
 }
 
-// RenderLogo returns the braille ASCII logo with a top-to-bottom gradient.
+// RenderLogo returns the ASCII logo with a top-to-bottom gradient.
 func RenderLogo() string {
 	total := len(logoLines)
 	if total == 0 {

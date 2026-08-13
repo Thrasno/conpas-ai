@@ -6,11 +6,24 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync/atomic"
 	"testing"
 
-	"github.com/Thrasno/conpas-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
+
+func TestMain(m *testing.M) {
+	if err := os.Unsetenv("GENTLE_AI_CHANNEL"); err != nil {
+		panic(err)
+	}
+
+	os.Exit(m.Run())
+}
 
 // --- TestDetectInstalledVersion ---
 
@@ -25,13 +38,13 @@ func TestDetectInstalledVersion(t *testing.T) {
 	}{
 		{
 			name:         "gentle-ai uses build var",
-			tool:         ToolInfo{Name: "conpas-ai", DetectCmd: nil},
+			tool:         ToolInfo{Name: "gentle-ai", DetectCmd: nil},
 			currentBuild: "1.5.0",
 			wantVersion:  "1.5.0",
 		},
 		{
 			name:         "gentle-ai dev build",
-			tool:         ToolInfo{Name: "conpas-ai", DetectCmd: nil},
+			tool:         ToolInfo{Name: "gentle-ai", DetectCmd: nil},
 			currentBuild: "dev",
 			wantVersion:  "dev",
 		},
@@ -42,9 +55,20 @@ func TestDetectInstalledVersion(t *testing.T) {
 				return "/usr/local/bin/engram", nil
 			},
 			execCommandFn: func(name string, args ...string) *exec.Cmd {
-				return exec.Command("echo", "engram v0.3.2")
+				return mockCmd("echo", "engram v0.3.2")
 			},
 			wantVersion: "0.3.2",
+		},
+		{
+			name: "engram dev output is preserved as dev sentinel",
+			tool: ToolInfo{Name: "engram", DetectCmd: []string{"engram", "version"}},
+			lookPathFn: func(string) (string, error) {
+				return "/usr/local/bin/engram", nil
+			},
+			execCommandFn: func(name string, args ...string) *exec.Cmd {
+				return mockCmd("echo", "engram dev")
+			},
+			wantVersion: "dev",
 		},
 		{
 			name: "gga not installed",
@@ -61,7 +85,7 @@ func TestDetectInstalledVersion(t *testing.T) {
 				return "/usr/local/bin/engram", nil
 			},
 			execCommandFn: func(name string, args ...string) *exec.Cmd {
-				return exec.Command("false") // exits with error
+				return mockCmd("false") // exits with error
 			},
 			wantVersion: "",
 		},
@@ -72,7 +96,7 @@ func TestDetectInstalledVersion(t *testing.T) {
 				return "/usr/local/bin/gga", nil
 			},
 			execCommandFn: func(name string, args ...string) *exec.Cmd {
-				return exec.Command("echo", "gga - no version info")
+				return mockCmd("echo", "gga - no version info")
 			},
 			wantVersion: "",
 		},
@@ -104,6 +128,593 @@ func TestDetectInstalledVersion(t *testing.T) {
 				t.Fatalf("detectInstalledVersion() = %q, want %q", got, tc.wantVersion)
 			}
 		})
+	}
+}
+
+// TestDetectInstalledVersionFallbackPaths verifies that detectInstalledVersion
+// reports a version when LookPath fails but the binary is present at a known
+// fallback path (the Windows post-install stale-PATH scenario, issue #177).
+func TestDetectInstalledVersionFallbackPaths(t *testing.T) {
+	// Create a real executable in a temp dir to serve as the "known install dir".
+	tmpDir := t.TempDir()
+	binaryName := "mytool"
+	binaryPath := filepath.Join(tmpDir, binaryName)
+	if err := os.WriteFile(binaryPath, []byte("placeholder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := ToolInfo{
+		Name:      "mytool",
+		DetectCmd: []string{binaryName, "--version"},
+		FallbackPaths: func(homeDir, localAppData string) []string {
+			return []string{filepath.Join(tmpDir, binaryName)}
+		},
+	}
+
+	origLookPath := lookPath
+	origExecCommand := execCommand
+	origOsStat := osStat
+	origUserHomeDir := userHomeDir
+	t.Cleanup(func() {
+		lookPath = origLookPath
+		execCommand = origExecCommand
+		osStat = origOsStat
+		userHomeDir = origUserHomeDir
+	})
+
+	// Simulate stale PATH: LookPath always fails.
+	lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
+
+	// Simulate the detect command succeeding when run with the full binary path.
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name == binaryPath {
+			return mockCmd("echo", "mytool 1.2.3")
+		}
+		return mockCmd("false")
+	}
+
+	// osStat must be real so the fallback path check finds the file.
+	osStat = os.Stat
+
+	userHomeDir = func() (string, error) { return t.TempDir(), nil }
+
+	got := detectInstalledVersion(context.Background(), tool, "")
+	if got != "1.2.3" {
+		t.Fatalf("detectInstalledVersion() = %q, want %q (LookPath failed but binary at fallback path)", got, "1.2.3")
+	}
+}
+
+// TestDetectInstalledVersionFallbackPathsNotFoundStillNotInstalled verifies
+// that when LookPath fails AND the binary is not at any fallback path,
+// detectInstalledVersion correctly returns "" (not installed).
+func TestDetectInstalledVersionFallbackPathsNotFoundStillNotInstalled(t *testing.T) {
+	tool := ToolInfo{
+		Name:      "mytool",
+		DetectCmd: []string{"mytool", "--version"},
+		FallbackPaths: func(homeDir, localAppData string) []string {
+			return []string{"/nonexistent/path/to/mytool"}
+		},
+	}
+
+	origLookPath := lookPath
+	origOsStat := osStat
+	origUserHomeDir := userHomeDir
+	t.Cleanup(func() {
+		lookPath = origLookPath
+		osStat = origOsStat
+		userHomeDir = origUserHomeDir
+	})
+
+	lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
+	osStat = func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
+	userHomeDir = func() (string, error) { return t.TempDir(), nil }
+
+	got := detectInstalledVersion(context.Background(), tool, "")
+	if got != "" {
+		t.Fatalf("detectInstalledVersion() = %q, want empty when binary not at any fallback path", got)
+	}
+}
+
+// TestDetectInstalledVersionFallbackPathsNoFallbackDefined verifies backward
+// compatibility: when FallbackPaths is nil, the original behavior is preserved.
+func TestDetectInstalledVersionFallbackPathsNoFallbackDefined(t *testing.T) {
+	tool := ToolInfo{
+		Name:          "mytool",
+		DetectCmd:     []string{"mytool", "--version"},
+		FallbackPaths: nil,
+	}
+
+	origLookPath := lookPath
+	t.Cleanup(func() { lookPath = origLookPath })
+
+	lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
+
+	got := detectInstalledVersion(context.Background(), tool, "")
+	if got != "" {
+		t.Fatalf("detectInstalledVersion() = %q, want empty when LookPath fails and no fallback defined", got)
+	}
+}
+
+func TestDetectInstalledVersionFromOpenCodeNodeModulePackageJSON(t *testing.T) {
+	home := t.TempDir()
+	pkgDir := filepath.Join(home, ".config", "opencode", "node_modules", "opencode-sdd-engram-manage")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"version":"1.1.7"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	origHome := userHomeDir
+	userHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { userHomeDir = origHome })
+
+	tool := ToolInfo{Name: "sdd-engram-plugin", NpmPackage: "opencode-sdd-engram-manage"}
+	if got := detectInstalledVersion(context.Background(), tool, "dev"); got != "1.1.7" {
+		t.Fatalf("detectInstalledVersion() = %q, want 1.1.7", got)
+	}
+}
+
+func TestDetectInstalledVersionFromOpenCodePackageJSONDependency(t *testing.T) {
+	home := t.TempDir()
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(opencodeDir, "package.json"), []byte(`{"dependencies":{"opencode-sdd-engram-manage":"^1.3.3"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	origHome := userHomeDir
+	userHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { userHomeDir = origHome })
+
+	tool := ToolInfo{Name: "sdd-engram-plugin", NpmPackage: "opencode-sdd-engram-manage"}
+	if got := detectInstalledVersion(context.Background(), tool, "dev"); got != "1.3.3" {
+		t.Fatalf("detectInstalledVersion() = %q, want 1.3.3", got)
+	}
+}
+
+func TestCheckSingleToolOpenCodePluginRegisteredNotMaterialized(t *testing.T) {
+	home := t.TempDir()
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["opencode-sdd-engram-manage"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	origHome := userHomeDir
+	origClient := httpClient
+	t.Cleanup(func() {
+		userHomeDir = origHome
+		httpClient = origClient
+	})
+	userHomeDir = func() (string, error) { return home, nil }
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(githubRelease{TagName: "v1.2.3", HTMLURL: "https://example.test/release"})
+	}))
+	defer server.Close()
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+
+	tool := ToolInfo{
+		Name:          "opencode-sdd-engram-manage",
+		Owner:         "owner",
+		Repo:          "repo",
+		InstallMethod: InstallOpenCodePlugin,
+		NpmPackage:    "opencode-sdd-engram-manage",
+	}
+
+	result := checkSingleTool(context.Background(), tool, "dev", system.PlatformProfile{})
+	if result.Status != RegisteredNotMaterialized {
+		t.Fatalf("status = %q, want %q", result.Status, RegisteredNotMaterialized)
+	}
+	if result.InstalledVersion != "" {
+		t.Fatalf("InstalledVersion = %q, want empty while package.json is missing", result.InstalledVersion)
+	}
+	if !strings.Contains(strings.ToLower(result.UpdateHint), "restart or reload opencode") {
+		t.Fatalf("UpdateHint should tell the user to restart/reload OpenCode, got %q", result.UpdateHint)
+	}
+	if !strings.Contains(result.UpdateHint, "peer dependency") {
+		t.Fatalf("UpdateHint should mention checking logs for dependency errors, got %q", result.UpdateHint)
+	}
+}
+
+func TestCheckSingleToolGentleAIBetaComparesMainHead(t *testing.T) {
+	t.Setenv("GENTLE_AI_CHANNEL", "beta")
+
+	origClient := httpClient
+	t.Cleanup(func() { httpClient = origClient })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/Gentleman-Programming/gentle-ai/releases/latest":
+			json.NewEncoder(w).Encode(githubRelease{TagName: "v1.40.3", HTMLURL: "https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v1.40.3"})
+		case "/repos/Gentleman-Programming/gentle-ai/commits/main":
+			json.NewEncoder(w).Encode(githubCommit{SHA: "972997650b51abcdef0123456789abcdef012345", HTMLURL: "https://github.com/Gentleman-Programming/gentle-ai/commit/972997650b51abcdef0123456789abcdef012345"})
+		default:
+			// Stray or misdirected request: reply 404 and let the test's
+			// main-goroutine assertions decide (see simulateStrayForeignRequest).
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+
+	result := checkSingleTool(context.Background(), Tools[0], "1.40.3-0.20260614151827-6eff4a1ba110", system.PlatformProfile{})
+
+	if result.Status != UpdateAvailable {
+		t.Fatalf("status = %q, want %q", result.Status, UpdateAvailable)
+	}
+	if result.LatestVersion != "main@972997650b51" {
+		t.Fatalf("LatestVersion = %q, want main@972997650b51", result.LatestVersion)
+	}
+	if !strings.Contains(result.ReleaseURL, "/compare/6eff4a1ba110...972997650b51") {
+		t.Fatalf("ReleaseURL = %q, want compare URL with local and remote commits", result.ReleaseURL)
+	}
+}
+
+func TestCheckSingleToolGentleAIPseudoVersionComparesMainHeadWithoutChannel(t *testing.T) {
+	unsetUpdateChannelEnv(t)
+
+	origClient := httpClient
+	t.Cleanup(func() { httpClient = origClient })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/Gentleman-Programming/gentle-ai/releases/latest":
+			json.NewEncoder(w).Encode(githubRelease{TagName: "v1.40.3", HTMLURL: "https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v1.40.3"})
+		case "/repos/Gentleman-Programming/gentle-ai/commits/main":
+			json.NewEncoder(w).Encode(githubCommit{SHA: "b6872c69e3e4abcdef0123456789abcdef012345", HTMLURL: "https://github.com/Gentleman-Programming/gentle-ai/commit/b6872c69e3e4abcdef0123456789abcdef012345"})
+		default:
+			// Stray or misdirected request: reply 404 and let the test's
+			// main-goroutine assertions decide (see simulateStrayForeignRequest).
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+
+	result := checkSingleTool(context.Background(), Tools[0], "1.40.3-0.20260614211459-6eff4a1ba110", system.PlatformProfile{})
+
+	if result.Status != UpdateAvailable {
+		t.Fatalf("status = %q, want %q", result.Status, UpdateAvailable)
+	}
+	if result.LatestVersion != "main@b6872c69e3e4" {
+		t.Fatalf("LatestVersion = %q, want main@b6872c69e3e4", result.LatestVersion)
+	}
+	if !strings.Contains(result.ReleaseURL, "/compare/6eff4a1ba110...b6872c69e3e4") {
+		t.Fatalf("ReleaseURL = %q, want compare URL with local and remote commits", result.ReleaseURL)
+	}
+}
+
+func TestUsesBetaMainHeadCheck(t *testing.T) {
+	tests := []struct {
+		name           string
+		channel        string
+		channelSet     bool
+		tool           ToolInfo
+		currentVersion string
+		want           bool
+	}{
+		{
+			name:           "explicit beta channel uses main head for stable version",
+			channel:        "beta",
+			channelSet:     true,
+			tool:           Tools[0],
+			currentVersion: "1.40.3",
+			want:           true,
+		},
+		{
+			name:           "pseudo-version uses main head without channel",
+			tool:           Tools[0],
+			currentVersion: "1.40.3-0.20260614211459-b6872c69e3e4",
+			want:           true,
+		},
+		{
+			name:           "stable semver without channel uses latest release",
+			tool:           Tools[0],
+			currentVersion: "1.40.3",
+			want:           false,
+		},
+		{
+			name:           "invalid version without channel uses latest release",
+			tool:           Tools[0],
+			currentVersion: "1.40.3-local",
+			want:           false,
+		},
+		{
+			name:           "timestamp and sha shaped invalid version uses latest release",
+			tool:           Tools[0],
+			currentVersion: "not-a-go-version-20260614211459-deadbee",
+			want:           false,
+		},
+		{
+			name:           "other tool pseudo-version still uses latest release",
+			tool:           ToolInfo{Name: "engram", Owner: "Gentleman-Programming", Repo: "engram"},
+			currentVersion: "1.40.3-0.20260614211459-b6872c69e3e4",
+			want:           false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.channelSet {
+				t.Setenv("GENTLE_AI_CHANNEL", tt.channel)
+			} else {
+				unsetUpdateChannelEnv(t)
+			}
+
+			got := usesBetaMainHeadCheck(tt.tool, tt.currentVersion)
+			if got != tt.want {
+				t.Fatalf("usesBetaMainHeadCheck() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCheckSingleToolGentleAIStableVersionWithoutChannelComparesLatestRelease(t *testing.T) {
+	unsetUpdateChannelEnv(t)
+
+	origClient := httpClient
+	t.Cleanup(func() { httpClient = origClient })
+
+	var mainHeadRequested atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/Gentleman-Programming/gentle-ai/releases/latest":
+			json.NewEncoder(w).Encode(githubRelease{TagName: "v1.40.4", HTMLURL: "https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v1.40.4"})
+		case "/repos/Gentleman-Programming/gentle-ai/commits/main":
+			// Record the prohibited request; the assertion runs on the
+			// main goroutine after the check completes.
+			mainHeadRequested.Store(true)
+			http.NotFound(w, r)
+		default:
+			// Stray or misdirected request: reply 404 and let the test's
+			// main-goroutine assertions decide (see simulateStrayForeignRequest).
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+
+	simulateStrayForeignRequest(t, server)
+
+	result := checkSingleTool(context.Background(), Tools[0], "1.40.3", system.PlatformProfile{})
+
+	if mainHeadRequested.Load() {
+		t.Fatal("stable channel must not request main HEAD")
+	}
+	if result.Status != UpdateAvailable {
+		t.Fatalf("status = %q, want %q", result.Status, UpdateAvailable)
+	}
+	if result.LatestVersion != "1.40.4" {
+		t.Fatalf("LatestVersion = %q, want 1.40.4", result.LatestVersion)
+	}
+	if result.ReleaseURL != "https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v1.40.4" {
+		t.Fatalf("ReleaseURL = %q, want latest release URL", result.ReleaseURL)
+	}
+}
+
+func TestCheckSingleToolGentleAIBetaAcceptsLocalCommitPrefix(t *testing.T) {
+	t.Setenv("GENTLE_AI_CHANNEL", "beta")
+
+	origClient := httpClient
+	t.Cleanup(func() { httpClient = origClient })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/Gentleman-Programming/gentle-ai/releases/latest":
+			json.NewEncoder(w).Encode(githubRelease{TagName: "v1.40.3", HTMLURL: "https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v1.40.3"})
+		case "/repos/Gentleman-Programming/gentle-ai/commits/main":
+			json.NewEncoder(w).Encode(githubCommit{SHA: "6eff4a1ba110abcdef0123456789abcdef012345", HTMLURL: "https://github.com/Gentleman-Programming/gentle-ai/commit/6eff4a1ba110abcdef0123456789abcdef012345"})
+		default:
+			// Stray or misdirected request: reply 404 and let the test's
+			// main-goroutine assertions decide (see simulateStrayForeignRequest).
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+
+	result := checkSingleTool(context.Background(), Tools[0], "1.40.3-0.20260614151827-6eff4a1ba110", system.PlatformProfile{})
+
+	if result.Status != UpToDate {
+		t.Fatalf("status = %q, want %q", result.Status, UpToDate)
+	}
+	if result.LatestVersion != "main@6eff4a1ba110" {
+		t.Fatalf("LatestVersion = %q, want main@6eff4a1ba110", result.LatestVersion)
+	}
+}
+
+func TestCheckSingleToolBrewOwnedGentleAIAdvertisesStableChannel(t *testing.T) {
+	// A brew-owned install can only ever receive the tap's stable formula, so
+	// the checker must not advertise a main-head beta target it cannot deliver
+	// (issue #2323 / #2319 offer half: advertisement derived from the installer's
+	// actual resolution).
+	unsetUpdateChannelEnv(t)
+
+	origDetector := homebrewOwnershipDetector
+	homebrewOwnershipDetector = func(string) (HomebrewOwnership, error) { return HomebrewFormula, nil }
+	t.Cleanup(func() { homebrewOwnershipDetector = origDetector })
+
+	origClient := httpClient
+	t.Cleanup(func() { httpClient = origClient })
+
+	var mainHeadRequested atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/Gentleman-Programming/gentle-ai/releases/latest":
+			json.NewEncoder(w).Encode(githubRelease{TagName: "v1.40.4", HTMLURL: "https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v1.40.4"})
+		case "/repos/Gentleman-Programming/gentle-ai/commits/main":
+			// Record the prohibited request; the assertion runs on the
+			// main goroutine after the check completes.
+			mainHeadRequested.Store(true)
+			http.NotFound(w, r)
+		default:
+			// Stray or misdirected request: reply 404 and let the test's
+			// main-goroutine assertions decide (see simulateStrayForeignRequest).
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+
+	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew"}
+	result := checkSingleTool(context.Background(), Tools[0], "1.40.3-0.20260614151827-6eff4a1ba110", profile)
+
+	if mainHeadRequested.Load() {
+		t.Fatal("brew-owned gentle-ai must not request main HEAD: brew cannot deliver a main@sha target")
+	}
+	if strings.HasPrefix(result.LatestVersion, "main@") {
+		t.Fatalf("LatestVersion = %q, want the stable release brew would deliver, not a main-head advertisement", result.LatestVersion)
+	}
+	if result.LatestVersion != "1.40.4" {
+		t.Fatalf("LatestVersion = %q, want 1.40.4", result.LatestVersion)
+	}
+	if result.Status != UpdateAvailable {
+		t.Fatalf("status = %q, want %q", result.Status, UpdateAvailable)
+	}
+	if result.UpdateHint != "brew upgrade --formula gentle-ai" {
+		t.Fatalf("UpdateHint = %q, want the brew instruction that delivers the advertised target", result.UpdateHint)
+	}
+}
+
+func TestCheckSingleToolGentleAIBetaHintNamesAdvertisedTarget(t *testing.T) {
+	// When the checker advertises main@<sha>, the printed instruction must
+	// install that channel. The stable install.sh hint silently replaces a beta
+	// build with the latest stable release (issue #2323).
+	unsetUpdateChannelEnv(t)
+
+	origClient := httpClient
+	t.Cleanup(func() { httpClient = origClient })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/Gentleman-Programming/gentle-ai/releases/latest":
+			json.NewEncoder(w).Encode(githubRelease{TagName: "v1.40.3", HTMLURL: "https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v1.40.3"})
+		case "/repos/Gentleman-Programming/gentle-ai/commits/main":
+			json.NewEncoder(w).Encode(githubCommit{SHA: "972997650b51abcdef0123456789abcdef012345", HTMLURL: "https://github.com/Gentleman-Programming/gentle-ai/commit/972997650b51abcdef0123456789abcdef012345"})
+		default:
+			// Stray or misdirected request: reply 404 and let the test's
+			// main-goroutine assertions decide (see simulateStrayForeignRequest).
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+
+	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
+	result := checkSingleTool(context.Background(), Tools[0], "1.40.3-0.20260614151827-6eff4a1ba110", profile)
+
+	if result.Status != UpdateAvailable {
+		t.Fatalf("status = %q, want %q", result.Status, UpdateAvailable)
+	}
+	if result.LatestVersion != "main@972997650b51" {
+		t.Fatalf("LatestVersion = %q, want main@972997650b51", result.LatestVersion)
+	}
+	derived := GentleAISourceInstallCommand(result.LatestVersion)
+	if result.UpdateHint != derived {
+		t.Fatalf("UpdateHint = %q, want the instruction derived from the advertised target: %q", result.UpdateHint, derived)
+	}
+	if result.UpdateHint != "go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main" {
+		t.Fatalf("UpdateHint = %q, want the go install @main command", result.UpdateHint)
+	}
+}
+
+func TestCheckSingleToolGentleAIBetaNewerLocalPseudoVersionIsNotOffered(t *testing.T) {
+	// A local build whose pseudo-version timestamp is newer than the remote
+	// main-head commit date is not behind main: offering "update available" on
+	// a bare prefix mismatch advertises a downgrade as an upgrade (issue #2319
+	// offer half).
+	unsetUpdateChannelEnv(t)
+
+	origClient := httpClient
+	t.Cleanup(func() { httpClient = origClient })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/Gentleman-Programming/gentle-ai/releases/latest":
+			json.NewEncoder(w).Encode(githubRelease{TagName: "v1.40.3", HTMLURL: "https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v1.40.3"})
+		case "/repos/Gentleman-Programming/gentle-ai/commits/main":
+			// Real API shape: the commit date rides inside commit.committer.date.
+			fmt.Fprint(w, `{"sha":"aaaabbbbcccc0123456789abcdef0123456789ab","html_url":"https://github.com/Gentleman-Programming/gentle-ai/commit/aaaabbbbcccc0123456789abcdef0123456789ab","commit":{"committer":{"date":"2026-07-25T10:00:00Z"}}}`)
+		default:
+			// Stray or misdirected request: reply 404 and let the test's
+			// main-goroutine assertions decide (see simulateStrayForeignRequest).
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+
+	// Local pseudo-version timestamp 2026-08-01 15:26:09 UTC is newer than the
+	// remote commit date 2026-07-25.
+	result := checkSingleTool(context.Background(), Tools[0], "1.40.3-0.20260801152609-6eff4a1ba110", system.PlatformProfile{})
+
+	if result.Status != UpToDate {
+		t.Fatalf("status = %q, want %q: local build is newer than remote main HEAD", result.Status, UpToDate)
+	}
+}
+
+func TestCheckSingleToolGentleAIBetaOlderLocalPseudoVersionStillOffered(t *testing.T) {
+	// The ordering guard must not suppress the genuine offer: a local build
+	// older than the remote main-head commit keeps UpdateAvailable.
+	unsetUpdateChannelEnv(t)
+
+	origClient := httpClient
+	t.Cleanup(func() { httpClient = origClient })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/Gentleman-Programming/gentle-ai/releases/latest":
+			json.NewEncoder(w).Encode(githubRelease{TagName: "v1.40.3", HTMLURL: "https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v1.40.3"})
+		case "/repos/Gentleman-Programming/gentle-ai/commits/main":
+			fmt.Fprint(w, `{"sha":"aaaabbbbcccc0123456789abcdef0123456789ab","html_url":"https://github.com/Gentleman-Programming/gentle-ai/commit/aaaabbbbcccc0123456789abcdef0123456789ab","commit":{"committer":{"date":"2026-08-01T00:00:00Z"}}}`)
+		default:
+			// Stray or misdirected request: reply 404 and let the test's
+			// main-goroutine assertions decide (see simulateStrayForeignRequest).
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+
+	// Local pseudo-version timestamp 2026-06-14 predates the remote commit.
+	result := checkSingleTool(context.Background(), Tools[0], "1.40.3-0.20260614151827-6eff4a1ba110", system.PlatformProfile{})
+
+	if result.Status != UpdateAvailable {
+		t.Fatalf("status = %q, want %q", result.Status, UpdateAvailable)
+	}
+	if result.LatestVersion != "main@aaaabbbbcccc" {
+		t.Fatalf("LatestVersion = %q, want main@aaaabbbbcccc", result.LatestVersion)
+	}
+	if !strings.Contains(result.ReleaseURL, "/compare/6eff4a1ba110...aaaabbbbcccc") {
+		t.Fatalf("ReleaseURL = %q, want compare URL with local and remote commits", result.ReleaseURL)
+	}
+}
+
+func TestParseVersionFromOutput_DevSentinel(t *testing.T) {
+	if got := parseVersionFromOutput("engram dev"); got != "dev" {
+		t.Fatalf("parseVersionFromOutput(engram dev) = %q, want %q", got, "dev")
 	}
 }
 
@@ -192,6 +803,78 @@ func TestFetchLatestRelease(t *testing.T) {
 	}
 }
 
+func TestFetchLatestReleaseMatchingPatternSkipsPiChannel(t *testing.T) {
+	var serverURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/Gentleman-Programming/engram/releases" || r.URL.Query().Get("per_page") != "100" {
+			// Stray or misdirected request: reply 404 and let the test's
+			// main-goroutine assertions decide (see simulateStrayForeignRequest).
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Query().Get("page") {
+		case "":
+			w.Header().Set("Link", fmt.Sprintf(`<%s/repos/Gentleman-Programming/engram/releases?per_page=100&page=2>; rel="next"`, serverURL))
+			json.NewEncoder(w).Encode([]githubRelease{
+				{TagName: "pi-v0.1.7", HTMLURL: "https://github.com/Gentleman-Programming/engram/releases/tag/pi-v0.1.7"},
+			})
+		case "2":
+			json.NewEncoder(w).Encode([]githubRelease{
+				{TagName: "v1.15.13", HTMLURL: "https://github.com/Gentleman-Programming/engram/releases/tag/v1.15.13"},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	serverURL = server.URL
+	defer server.Close()
+
+	origClient := httpClient
+	t.Cleanup(func() { httpClient = origClient })
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+
+	simulateStrayForeignRequest(t, server)
+
+	release, err := fetchLatestReleaseMatchingPattern(context.Background(), "Gentleman-Programming", "engram", `^v[0-9]+\.[0-9]+\.[0-9]+$`)
+	if err != nil {
+		t.Fatalf("fetchLatestReleaseMatchingPattern() error = %v", err)
+	}
+	if release.TagName != "v1.15.13" {
+		t.Fatalf("TagName = %q, want v1.15.13", release.TagName)
+	}
+}
+
+func TestFetchLatestReleaseMatchingPatternRejectsPaginationLoop(t *testing.T) {
+	var serverURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Link", fmt.Sprintf(`<%s/repos/Gentleman-Programming/engram/releases?per_page=100>; rel="next"`, serverURL))
+		json.NewEncoder(w).Encode([]githubRelease{{TagName: "pi-v0.1.7"}})
+	}))
+	serverURL = server.URL
+	defer server.Close()
+
+	origClient := httpClient
+	t.Cleanup(func() { httpClient = origClient })
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+
+	_, err := fetchLatestReleaseMatchingPattern(context.Background(), "Gentleman-Programming", "engram", `^v[0-9]+\.[0-9]+\.[0-9]+$`)
+	if err == nil || !strings.Contains(err.Error(), "pagination loop detected") {
+		t.Fatalf("expected pagination loop error, got %v", err)
+	}
+}
+
+func TestNextGitHubPageFindsRelAfterOtherParameters(t *testing.T) {
+	got := nextGitHubPage(`<https://api.github.com/repos/o/r/releases?per_page=100&page=2>; type="application/json"; rel="next"`)
+	want := "https://api.github.com/repos/o/r/releases?per_page=100&page=2"
+	if got != want {
+		t.Fatalf("nextGitHubPage() = %q, want %q", got, want)
+	}
+}
+
 // TestFetchLatestRelease_Timeout verifies timeout handling.
 func TestFetchLatestRelease_Timeout(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -245,8 +928,8 @@ func TestFetchLatestRelease_GithubToken(t *testing.T) {
 		t.Fatalf("Authorization = %q, want %q", gotAuth, "Bearer test-token-123")
 	}
 
-	if gotUserAgent != "conpas-ai-update-check" {
-		t.Fatalf("User-Agent = %q, want %q", gotUserAgent, "conpas-ai-update-check")
+	if gotUserAgent != "gentle-ai-update-check" {
+		t.Fatalf("User-Agent = %q, want %q", gotUserAgent, "gentle-ai-update-check")
 	}
 }
 
@@ -258,10 +941,22 @@ func TestResolveGitHubToken_EnvVarWins(t *testing.T) {
 	}
 }
 
+// TestResolveGitHubToken_GHTokenFallback verifies GH_TOKEN is used when
+// GITHUB_TOKEN is unset, matching the gh CLI environment convention.
+func TestResolveGitHubToken_GHTokenFallback(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", " gh-token ")
+
+	if got := resolveGitHubToken(); got != "gh-token" {
+		t.Fatalf("resolveGitHubToken() = %q, want %q", got, "gh-token")
+	}
+}
+
 // TestResolveGitHubToken_EmptyWhenNoEnvAndNoGh verifies empty string returned when
 // GITHUB_TOKEN is unset and gh is not in PATH.
 func TestResolveGitHubToken_EmptyWhenNoEnvAndNoGh(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
 	origLookPath := ghLookPath
 	t.Cleanup(func() { ghLookPath = origLookPath })
 	ghLookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
@@ -274,6 +969,7 @@ func TestResolveGitHubToken_EmptyWhenNoEnvAndNoGh(t *testing.T) {
 // --- TestCheckAll ---
 
 func TestCheckAll(t *testing.T) {
+	mockNoHomebrew(t)
 	// Set up fake GitHub API that returns different versions per repo.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -282,12 +978,16 @@ func TestCheckAll(t *testing.T) {
 		path := r.URL.Path
 		var release githubRelease
 		switch {
-		case contains(path, "conpas-ai"):
-			release = githubRelease{TagName: "v1.5.0", HTMLURL: "https://github.com/Thrasno/conpas-ai/releases/tag/v1.5.0"}
-		case contains(path, "engram"):
-			release = githubRelease{TagName: "v0.4.0", HTMLURL: "https://github.com/Gentleman-Programming/engram/releases/tag/v0.4.0"}
+		case contains(path, "gentle-ai"):
+			release = githubRelease{TagName: "v1.5.0", HTMLURL: "https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v1.5.0"}
 		case contains(path, "gentleman-guardian-angel"):
 			release = githubRelease{TagName: "v2.0.0", HTMLURL: "https://github.com/Gentleman-Programming/gentleman-guardian-angel/releases/tag/v2.0.0"}
+		case contains(path, "sub-agent-statusline"):
+			release = githubRelease{TagName: "v0.4.0", HTMLURL: "https://github.com/Joaquinvesapa/sub-agent-statusline/releases/tag/v0.4.0"}
+		case contains(path, "sdd-engram-plugin"):
+			release = githubRelease{TagName: "v1.1.7", HTMLURL: "https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/releases/tag/v1.1.7"}
+		case contains(path, "engram"):
+			release = githubRelease{TagName: "v0.4.0", HTMLURL: "https://github.com/Gentleman-Programming/engram/releases/tag/v0.4.0"}
 		}
 		json.NewEncoder(w).Encode(release)
 	}))
@@ -296,10 +996,12 @@ func TestCheckAll(t *testing.T) {
 	origClient := httpClient
 	origLookPath := lookPath
 	origExecCommand := execCommand
+	origUserHomeDir := userHomeDir
 	t.Cleanup(func() {
 		httpClient = origClient
 		lookPath = origLookPath
 		execCommand = origExecCommand
+		userHomeDir = origUserHomeDir
 	})
 
 	httpClient = server.Client()
@@ -318,26 +1020,79 @@ func TestCheckAll(t *testing.T) {
 	}
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		if name == "engram" {
-			return exec.Command("echo", "engram v0.3.2")
+			return mockCmd("echo", "engram v0.3.2")
 		}
-		return exec.Command("false")
+		return mockCmd("false")
 	}
+	pluginHome := t.TempDir()
+	userHomeDir = func() (string, error) { return pluginHome, nil }
 
 	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}
 	results := CheckAll(context.Background(), "1.5.0", profile)
 
-	if len(results) != 3 {
-		t.Fatalf("len(results) = %d, want 3", len(results))
+	if len(results) != 5 {
+		t.Fatalf("len(results) = %d, want 5", len(results))
 	}
 
 	// gentle-ai: 1.5.0 local == 1.5.0 remote → UpToDate
-	assertResult(t, results[0], "conpas-ai", UpToDate, "1.5.0", "1.5.0")
+	assertResult(t, results[0], "gentle-ai", UpToDate, "1.5.0", "1.5.0")
 
 	// engram: 0.3.2 local < 0.4.0 remote → UpdateAvailable
 	assertResult(t, results[1], "engram", UpdateAvailable, "0.3.2", "0.4.0")
 
 	// gga: not installed
 	assertResult(t, results[2], "gga", NotInstalled, "", "2.0.0")
+	assertResult(t, results[3], "opencode-subagent-statusline", NotInstalled, "", "0.4.0")
+	assertResult(t, results[4], "opencode-sdd-engram-manage", NotInstalled, "", "1.1.7")
+}
+
+func TestCheckSingleTool_EngramUsesBinaryReleaseChannel(t *testing.T) {
+	mockNoHomebrew(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/Gentleman-Programming/engram/releases":
+			json.NewEncoder(w).Encode([]githubRelease{
+				{TagName: "pi-v0.1.7", HTMLURL: "https://github.com/Gentleman-Programming/engram/releases/tag/pi-v0.1.7"},
+				{TagName: "v1.15.13", HTMLURL: "https://github.com/Gentleman-Programming/engram/releases/tag/v1.15.13"},
+			})
+		default:
+			// Stray or misdirected request: reply 404 and let the test's
+			// main-goroutine assertions decide (see simulateStrayForeignRequest).
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	origClient := httpClient
+	origLookPath := lookPath
+	origExecCommand := execCommand
+	t.Cleanup(func() {
+		httpClient = origClient
+		lookPath = origLookPath
+		execCommand = origExecCommand
+	})
+
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+	lookPath = func(name string) (string, error) {
+		if name == "engram" {
+			return "/usr/local/bin/engram", nil
+		}
+		return "", fmt.Errorf("not found")
+	}
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "engram" {
+			return exec.Command("echo", "engram 1.15.13")
+		}
+		return exec.Command("false")
+	}
+
+	result := checkSingleTool(context.Background(), Tools[1], "dev", system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true})
+	assertResult(t, result, "engram", UpToDate, "1.15.13", "1.15.13")
+	if result.ReleaseURL != "https://github.com/Gentleman-Programming/engram/releases/tag/v1.15.13" {
+		t.Fatalf("ReleaseURL = %q, want binary channel release", result.ReleaseURL)
+	}
 }
 
 func TestCheckAll_NetworkError(t *testing.T) {
@@ -367,7 +1122,7 @@ func TestCheckAll_NetworkError(t *testing.T) {
 	httpClient.Transport = &testTransport{server: server}
 
 	lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
-	execCommand = func(name string, args ...string) *exec.Cmd { return exec.Command("false") }
+	execCommand = func(name string, args ...string) *exec.Cmd { return mockCmd("false") }
 
 	profile := system.PlatformProfile{OS: "linux", LinuxDistro: "ubuntu", PackageManager: "apt", Supported: true}
 	results := CheckAll(context.Background(), "1.0.0", profile)
@@ -413,7 +1168,7 @@ func TestCheckFiltered_FetchErrorPreservesCheckFailedForMissingTool(t *testing.T
 	httpClient = server.Client()
 	httpClient.Transport = &testTransport{server: server}
 	lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
-	execCommand = func(name string, args ...string) *exec.Cmd { return exec.Command("false") }
+	execCommand = func(name string, args ...string) *exec.Cmd { return mockCmd("false") }
 
 	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}
 	results := CheckFiltered(context.Background(), "1.0.0", profile, []string{"engram"})
@@ -429,53 +1184,78 @@ func TestCheckFiltered_FetchErrorPreservesCheckFailedForMissingTool(t *testing.T
 // --- TestUpdateHint ---
 
 func TestUpdateHint(t *testing.T) {
+	origHomebrewPackageInstalled := homebrewPackageInstalled
+	t.Cleanup(func() { homebrewPackageInstalled = origHomebrewPackageInstalled })
+
 	tests := []struct {
-		name    string
-		tool    ToolInfo
-		profile system.PlatformProfile
-		want    string
+		name          string
+		tool          ToolInfo
+		profile       system.PlatformProfile
+		brewInstalled bool
+		want          string
 	}{
 		{
-			name:    "gentle-ai macOS",
-			tool:    ToolInfo{Name: "conpas-ai"},
+			name:          "gentle-ai macOS brew-owned",
+			tool:          ToolInfo{Name: "gentle-ai"},
+			profile:       system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
+			brewInstalled: true,
+			want:          "brew upgrade gentle-ai",
+		},
+		{
+			name:    "gentle-ai macOS non-brew",
+			tool:    ToolInfo{Name: "gentle-ai"},
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
-			want:    "brew upgrade conpas-ai",
+			want:    "gentle-ai upgrade (downloads pre-built binary)",
 		},
 		{
 			name:    "gentle-ai linux",
-			tool:    ToolInfo{Name: "conpas-ai"},
+			tool:    ToolInfo{Name: "gentle-ai"},
 			profile: system.PlatformProfile{OS: "linux", PackageManager: "apt"},
-			want:    "curl -fsSL https://raw.githubusercontent.com/Thrasno/conpas-ai/main/scripts/install.sh | bash",
+			want:    "curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash",
 		},
 		{
 			name:    "gentle-ai windows",
-			tool:    ToolInfo{Name: "conpas-ai"},
+			tool:    ToolInfo{Name: "gentle-ai"},
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
-			want:    "irm https://raw.githubusercontent.com/Thrasno/conpas-ai/main/scripts/install.ps1 | iex",
+			want:    "Windows binary distribution and Scoop are temporarily unavailable until publicly trusted Authenticode signing is enforced. Install/update from source with Go 1.25.10+: go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest",
 		},
 		{
-			name:    "engram macOS brew",
+			name:          "engram macOS brew-owned",
+			tool:          ToolInfo{Name: "engram"},
+			profile:       system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
+			brewInstalled: true,
+			want:          "brew upgrade engram",
+		},
+		{
+			name:    "engram macOS non-brew",
 			tool:    ToolInfo{Name: "engram"},
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
-			want:    "brew upgrade engram",
+			want:    "gentle-ai upgrade (downloads pre-built binary)",
 		},
 		{
 			name:    "engram linux",
 			tool:    ToolInfo{Name: "engram"},
 			profile: system.PlatformProfile{OS: "linux", PackageManager: "apt"},
-			want:    "conpas-ai upgrade (downloads pre-built binary)",
+			want:    "gentle-ai upgrade (downloads pre-built binary)",
 		},
 		{
 			name:    "engram windows",
 			tool:    ToolInfo{Name: "engram"},
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
-			want:    "conpas-ai upgrade (downloads pre-built binary)",
+			want:    "gentle-ai upgrade (downloads pre-built binary)",
 		},
 		{
-			name:    "gga macOS brew",
+			name:          "gga macOS brew-owned",
+			tool:          ToolInfo{Name: "gga"},
+			profile:       system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
+			brewInstalled: true,
+			want:          "brew upgrade gga",
+		},
+		{
+			name:    "gga macOS non-brew",
 			tool:    ToolInfo{Name: "gga"},
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
-			want:    "brew upgrade gga",
+			want:    "See https://github.com/Gentleman-Programming/gentleman-guardian-angel",
 		},
 		{
 			name:    "gga linux",
@@ -493,11 +1273,47 @@ func TestUpdateHint(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			homebrewPackageInstalled = func(toolName string) bool {
+				return toolName == tc.tool.Name && tc.brewInstalled
+			}
+
 			got := updateHint(tc.tool, tc.profile)
 			if got != tc.want {
 				t.Fatalf("updateHint(%q, %q) = %q, want %q", tc.tool.Name, tc.profile.OS, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestHomebrewPackageInstalledWithRequiresActiveBrewPath(t *testing.T) {
+	brewPrefix := filepath.Join(t.TempDir(), "opt", "gentle-ai")
+	brewBin := filepath.Join(brewPrefix, "bin", "gentle-ai")
+	nonBrewBin := filepath.Join(t.TempDir(), "gentle-ai")
+
+	run := func(name string, args ...string) *exec.Cmd {
+		if name != "brew" {
+			return mockCmd("false")
+		}
+		if len(args) >= 3 && args[0] == "list" && args[1] == "--formula" && args[2] == "gentle-ai" {
+			return mockCmd("true")
+		}
+		if len(args) == 2 && args[0] == "--prefix" && args[1] == "gentle-ai" {
+			return mockCmd("echo", brewPrefix)
+		}
+		return mockCmd("false")
+	}
+
+	if !homebrewPackageInstalledWith(run, func(string) (string, error) { return brewBin, nil }, "gentle-ai") {
+		t.Fatal("expected brew-owned active path to be treated as Homebrew installed")
+	}
+	if homebrewPackageInstalledWith(run, func(string) (string, error) { return nonBrewBin, nil }, "gentle-ai") {
+		t.Fatal("expected shadowing non-brew active path to avoid Homebrew")
+	}
+	if homebrewPackageInstalledWith(func(string, ...string) *exec.Cmd { return mockCmd("false") }, func(string) (string, error) { return brewBin, nil }, "gentle-ai") {
+		t.Fatal("expected brew list failure to avoid Homebrew")
+	}
+	if homebrewPackageInstalledWith(func(string, ...string) *exec.Cmd { return mockCmd("true") }, func(string) (string, error) { return "", fmt.Errorf("not found") }, "gentle-ai") {
+		t.Fatal("expected active path lookup failure to avoid Homebrew")
 	}
 }
 
@@ -630,17 +1446,19 @@ func TestParseVersionFromOutput(t *testing.T) {
 
 // TestRegistryContents verifies the registry has all expected tools.
 func TestRegistryContents(t *testing.T) {
-	if len(Tools) != 3 {
-		t.Fatalf("len(Tools) = %d, want 3", len(Tools))
+	if len(Tools) != 5 {
+		t.Fatalf("len(Tools) = %d, want 5", len(Tools))
 	}
 
 	expected := map[string]struct {
 		owner string
 		repo  string
 	}{
-		"conpas-ai": {owner: "Thrasno", repo: "conpas-ai"},
-		"engram":    {owner: "Gentleman-Programming", repo: "engram"},
-		"gga":       {owner: "Gentleman-Programming", repo: "gentleman-guardian-angel"},
+		"gentle-ai":                    {owner: "Gentleman-Programming", repo: "gentle-ai"},
+		"engram":                       {owner: "Gentleman-Programming", repo: "engram"},
+		"gga":                          {owner: "Gentleman-Programming", repo: "gentleman-guardian-angel"},
+		"opencode-subagent-statusline": {owner: "Joaquinvesapa", repo: "sub-agent-statusline"},
+		"opencode-sdd-engram-manage":   {owner: "j0k3r-dev-rgl", repo: "sdd-engram-plugin"},
 	}
 
 	for _, tool := range Tools {
@@ -665,14 +1483,21 @@ func TestRegistryContents(t *testing.T) {
 	if Tools[1].DetectCmd == nil {
 		t.Fatalf("engram DetectCmd should not be nil")
 	}
+	if Tools[1].ReleaseTagPattern != `^v[0-9]+\.[0-9]+\.[0-9]+$` {
+		t.Fatalf("engram ReleaseTagPattern = %q, want binary v* channel pattern", Tools[1].ReleaseTagPattern)
+	}
 	if Tools[2].DetectCmd == nil {
 		t.Fatalf("gga DetectCmd should not be nil")
+	}
+	if Tools[3].NpmPackage == "" || Tools[4].NpmPackage == "" {
+		t.Fatalf("OpenCode plugin tools should declare NpmPackage")
 	}
 }
 
 // TestCheckAll_DevVersion verifies that "dev" build version results in DevBuild
 // (not VersionUnknown — dev is a well-known sentinel for source-built binaries).
 func TestCheckAll_DevVersion(t *testing.T) {
+	mockNoHomebrew(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -700,7 +1525,7 @@ func TestCheckAll_DevVersion(t *testing.T) {
 	Tools = []ToolInfo{Tools[0]}
 
 	lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
-	execCommand = func(name string, args ...string) *exec.Cmd { return exec.Command("false") }
+	execCommand = func(name string, args ...string) *exec.Cmd { return mockCmd("false") }
 
 	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}
 	results := CheckAll(context.Background(), "dev", profile)
@@ -746,9 +1571,9 @@ func TestCheckFiltered_SubsetOfTools(t *testing.T) {
 	}
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		if name == "engram" {
-			return exec.Command("echo", "engram v0.9.9")
+			return mockCmd("echo", "engram v0.9.9")
 		}
-		return exec.Command("false")
+		return mockCmd("false")
 	}
 
 	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}
@@ -784,7 +1609,7 @@ func TestCheckFiltered_EmptyFilter(t *testing.T) {
 	httpClient = server.Client()
 	httpClient.Transport = &testTransport{server: server}
 	lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
-	execCommand = func(name string, args ...string) *exec.Cmd { return exec.Command("false") }
+	execCommand = func(name string, args ...string) *exec.Cmd { return mockCmd("false") }
 
 	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}
 
@@ -817,7 +1642,7 @@ func TestCheckFiltered_UnknownToolIgnored(t *testing.T) {
 	httpClient = server.Client()
 	httpClient.Transport = &testTransport{server: server}
 	lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
-	execCommand = func(name string, args ...string) *exec.Cmd { return exec.Command("false") }
+	execCommand = func(name string, args ...string) *exec.Cmd { return mockCmd("false") }
 
 	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}
 
@@ -835,6 +1660,7 @@ func TestCheckFiltered_UnknownToolIgnored(t *testing.T) {
 //   - Dev build MUST be reported as development-build semantic
 //   - gentle-ai self-upgrade is skipped while engram/gga remain eligible
 func TestCheckFiltered_DevBuildSemanticsForGentleAI(t *testing.T) {
+	mockNoHomebrew(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -856,7 +1682,7 @@ func TestCheckFiltered_DevBuildSemanticsForGentleAI(t *testing.T) {
 	httpClient = server.Client()
 	httpClient.Transport = &testTransport{server: server}
 	lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
-	execCommand = func(name string, args ...string) *exec.Cmd { return exec.Command("false") }
+	execCommand = func(name string, args ...string) *exec.Cmd { return mockCmd("false") }
 	Tools = []ToolInfo{Tools[0]} // gentle-ai only
 
 	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}
@@ -867,8 +1693,8 @@ func TestCheckFiltered_DevBuildSemanticsForGentleAI(t *testing.T) {
 	}
 
 	r := results[0]
-	if r.Tool.Name != "conpas-ai" {
-		t.Fatalf("tool = %q, want conpas-ai", r.Tool.Name)
+	if r.Tool.Name != "gentle-ai" {
+		t.Fatalf("tool = %q, want gentle-ai", r.Tool.Name)
 	}
 
 	// Dev build should be reported as DevBuild status, not VersionUnknown or UpdateAvailable.
@@ -880,6 +1706,7 @@ func TestCheckFiltered_DevBuildSemanticsForGentleAI(t *testing.T) {
 // TestCheckFiltered_DevBuildSkipNotEligible verifies that in a mixed run,
 // gentle-ai with "dev" version gets DevBuild while engram with a real version stays eligible.
 func TestCheckFiltered_DevBuildSkipNotEligible(t *testing.T) {
+	mockNoHomebrew(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -887,7 +1714,7 @@ func TestCheckFiltered_DevBuildSkipNotEligible(t *testing.T) {
 		path := r.URL.Path
 		var release githubRelease
 		switch {
-		case contains(path, "conpas-ai"):
+		case contains(path, "gentle-ai"):
 			release = githubRelease{TagName: "v9.9.9"}
 		case contains(path, "engram"):
 			release = githubRelease{TagName: "v2.0.0"}
@@ -921,9 +1748,9 @@ func TestCheckFiltered_DevBuildSkipNotEligible(t *testing.T) {
 	}
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		if name == "engram" {
-			return exec.Command("echo", "engram v1.0.0")
+			return mockCmd("echo", "engram v1.0.0")
 		}
-		return exec.Command("false")
+		return mockCmd("false")
 	}
 	// Only gentle-ai and engram for this test
 	Tools = []ToolInfo{Tools[0], Tools[1]}
@@ -948,6 +1775,7 @@ func TestCheckFiltered_DevBuildSkipNotEligible(t *testing.T) {
 
 // TestNoUpdatesPath verifies CheckFiltered returns correct statuses when nothing needs updating.
 func TestNoUpdatesPath(t *testing.T) {
+	mockNoHomebrew(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -989,9 +1817,9 @@ func TestNoUpdatesPath(t *testing.T) {
 	}
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		if name == "engram" {
-			return exec.Command("echo", "engram v0.3.2")
+			return mockCmd("echo", "engram v0.3.2")
 		}
-		return exec.Command("false")
+		return mockCmd("false")
 	}
 	// Only engram and gga for this test (skip gentle-ai to avoid dev-build behavior)
 	Tools = []ToolInfo{Tools[1], Tools[2]}
@@ -1074,7 +1902,165 @@ func TestInstallMethodFieldsOnRegistry(t *testing.T) {
 	}
 }
 
+func TestBuildExecCmd_Ps1UsesPoershellFile(t *testing.T) {
+	ps1Path := `C:\Users\test\bin\gga.ps1`
+
+	gotBin, gotArgs := buildExecCmd(ps1Path, []string{"--version"})
+
+	if gotBin == ps1Path {
+		t.Fatalf("buildExecCmd returned the .ps1 path as argv[0]: %q — "+
+			"exec.Command cannot launch .ps1 directly on Windows (CreateProcess rejects non-PE images). "+
+			"Must be wrapped via the PowerShell resolver.", gotBin)
+	}
+
+	wantArgs := []string{"-NoProfile", "-File", ps1Path, "--version"}
+	if len(gotArgs) != len(wantArgs) {
+		t.Fatalf("buildExecCmd args len = %d, want %d; args = %v", len(gotArgs), len(wantArgs), gotArgs)
+	}
+	for i, want := range wantArgs {
+		if gotArgs[i] != want {
+			t.Fatalf("buildExecCmd args[%d] = %q, want %q; full args = %v", i, gotArgs[i], want, gotArgs)
+		}
+	}
+}
+
+func TestBuildExecCmd_NonPs1Passthrough(t *testing.T) {
+	cases := []struct {
+		binary string
+		args   []string
+	}{
+		{"/usr/local/bin/engram", []string{"version"}},
+		{`C:\Users\user\AppData\Local\engram\bin\engram.exe`, []string{"version"}},
+		{"/home/user/.local/bin/gga", []string{"--version"}},
+	}
+
+	for _, c := range cases {
+		gotBin, gotArgs := buildExecCmd(c.binary, c.args)
+		if gotBin != c.binary {
+			t.Errorf("buildExecCmd(%q) binary = %q, want passthrough %q", c.binary, gotBin, c.binary)
+		}
+		if len(gotArgs) != len(c.args) {
+			t.Errorf("buildExecCmd(%q) args = %v, want %v", c.binary, gotArgs, c.args)
+			continue
+		}
+		for i := range c.args {
+			if gotArgs[i] != c.args[i] {
+				t.Errorf("buildExecCmd(%q) args[%d] = %q, want %q", c.binary, i, gotArgs[i], c.args[i])
+			}
+		}
+	}
+}
+
+// TestDetectInstalledVersionPs1FallbackInvokesViaPowershell verifies the full
+// integration path: when LookPath fails for gga, the fallback finds a .ps1
+// file on disk and dispatches it through the central PowerShell resolver.
+func TestDetectInstalledVersionPs1FallbackInvokesViaPowershell(t *testing.T) {
+	tmpDir := t.TempDir()
+	ps1Path := filepath.Join(tmpDir, "gga.ps1")
+	if err := os.WriteFile(ps1Path, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := ToolInfo{
+		Name:      "gga",
+		DetectCmd: []string{"gga", "--version"},
+		FallbackPaths: func(homeDir, localAppData string) []string {
+			return []string{ps1Path}
+		},
+	}
+
+	origLookPath := lookPath
+	origExecCommand := execCommand
+	origRunPowerShell := runPowerShell
+	origOsStat := osStat
+	origUserHomeDir := userHomeDir
+	t.Cleanup(func() {
+		lookPath = origLookPath
+		execCommand = origExecCommand
+		runPowerShell = origRunPowerShell
+		osStat = origOsStat
+		userHomeDir = origUserHomeDir
+	})
+
+	// Simulate stale PATH: gga not found via LookPath.
+	lookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
+	osStat = os.Stat // real stat so the .ps1 file is found
+	userHomeDir = func() (string, error) { return t.TempDir(), nil }
+
+	// Capture the command planned for the PowerShell runner.
+	var capturedBinary string
+	var capturedArgs []string
+	runPowerShell = func(_ context.Context, args ...string) ([]byte, error) {
+		capturedBinary = powerShellCommand
+		capturedArgs = append([]string{}, args...)
+		return []byte("gga 1.2.3"), nil
+	}
+
+	got := detectInstalledVersion(context.Background(), tool, "")
+
+	// Primary assertion: the binary must NOT be the .ps1 path itself.
+	if capturedBinary == ps1Path {
+		t.Fatalf("PowerShell runner received the .ps1 path as the executable (%q)", capturedBinary)
+	}
+
+	// The first arg must be -NoProfile (PowerShell wrapping).
+	if len(capturedArgs) == 0 || capturedArgs[0] != "-NoProfile" {
+		t.Fatalf("PowerShell args[0] = %q, want \"-NoProfile\"; full args = %v", func() string {
+			if len(capturedArgs) > 0 {
+				return capturedArgs[0]
+			}
+			return "(empty)"
+		}(), capturedArgs)
+	}
+
+	// The -File flag must point to the .ps1 path.
+	if len(capturedArgs) < 3 || capturedArgs[1] != "-File" || capturedArgs[2] != ps1Path {
+		t.Fatalf("expected args [-NoProfile, -File, %q, ...], got %v", ps1Path, capturedArgs)
+	}
+
+	// The version must still be extracted from output.
+	if got != "1.2.3" {
+		t.Fatalf("detectInstalledVersion() = %q, want \"1.2.3\"", got)
+	}
+}
+
 // --- helpers ---
+
+func unsetUpdateChannelEnv(t *testing.T) {
+	t.Helper()
+
+	oldValue, hadValue := os.LookupEnv("GENTLE_AI_CHANNEL")
+	if err := os.Unsetenv("GENTLE_AI_CHANNEL"); err != nil {
+		t.Fatalf("unset GENTLE_AI_CHANNEL: %v", err)
+	}
+	t.Cleanup(func() {
+		if hadValue {
+			if err := os.Setenv("GENTLE_AI_CHANNEL", oldValue); err != nil {
+				t.Fatalf("restore GENTLE_AI_CHANNEL: %v", err)
+			}
+			return
+		}
+		if err := os.Unsetenv("GENTLE_AI_CHANNEL"); err != nil {
+			t.Fatalf("restore unset GENTLE_AI_CHANNEL: %v", err)
+		}
+	})
+}
+
+// simulateStrayForeignRequest sends the exact request shape issue #2483
+// observed landing on this package's test servers during overlapping suite
+// runs on one machine: a bare `GET /` from a foreign process whose closed
+// httptest server's ephemeral port was reused by ours. Handlers must
+// tolerate such strays (reply 404, never t.Fatalf, which is also undefined
+// behavior off the test goroutine); only the code under test's own requests
+// and the test's main-goroutine assertions may decide the outcome.
+func simulateStrayForeignRequest(t *testing.T, server *httptest.Server) {
+	t.Helper()
+	resp, err := http.Get(server.URL)
+	if err != nil {
+		t.Fatalf("stray probe request: %v", err)
+	}
+	resp.Body.Close()
+}
 
 // testTransport redirects all requests to the test server.
 type testTransport struct {
@@ -1113,4 +2099,19 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+func mockCmd(name string, args ...string) *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		if name == "echo" {
+			return exec.Command("cmd", "/c", "echo "+strings.Join(args, " "))
+		}
+		if name == "true" {
+			return exec.Command("cmd", "/c", "exit 0")
+		}
+		if name == "false" {
+			return exec.Command("cmd", "/c", "exit 1")
+		}
+	}
+	return exec.Command(name, args...)
 }

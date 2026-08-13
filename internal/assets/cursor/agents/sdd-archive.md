@@ -29,6 +29,10 @@ Execute all steps from the skill directly in this context window:
 4. Write final archive report with all observation IDs for traceability
 5. Persist archive report to active backend
 
+Treat `verify-report` and `apply-progress` as intermediate snapshots: the archive report records the state at close per the skill's Final-State Authority section, and explicit final-state facts in your launch prompt outrank stale snapshot claims.
+
+Copy and move archive artifacts mechanically with shell commands (`cp -R`, `mv`, `git mv`) only — NEVER Read a file and Write its content back, which routes bytes through the model and can truncate silently. After every copy/move, run `diff -r` (source vs. destination, archive-report additive-only) and include its verbatim output in your result; an empty diff is the only passing evidence.
+
 ## Engram Save (mandatory)
 
 After completing work, call `mem_save` with:
@@ -36,6 +40,7 @@ After completing work, call `mem_save` with:
 - topic_key: `"sdd/{change-name}/archive-report"`
 - type: `"architecture"`
 - project: `{project-name from context}`
+- capture_prompt: `false` when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.
 
 ## Result Contract
 
@@ -45,4 +50,4 @@ Return a structured result with these fields:
 - `artifacts`: topic_keys or file paths written (e.g. `sdd/{change-name}/archive-report`, archived folder path)
 - `next_recommended`: `none` (change is complete) or a new `/sdd-new` if follow-up is needed
 - `risks`: any artifacts that could not be merged or archived cleanly
-- `skill_resolution`: `injected` if compact rules were provided in invocation message, otherwise `none`
+- `skill_resolution`: `paths-injected` if exact skill paths were provided and loaded, otherwise `none`

@@ -3,16 +3,12 @@ package agents
 import (
 	"context"
 
-	"github.com/Thrasno/conpas-ai/internal/model"
-	"github.com/Thrasno/conpas-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 // Capability tags for adapter feature checks.
 type Capability string
-
-const (
-	CapabilityAutoInstall Capability = "auto-install"
-)
 
 // Adapter is the core abstraction for AI agent integration. Components use
 // adapter methods instead of switch statements on AgentID, making it trivial
@@ -26,7 +22,6 @@ type Adapter interface {
 	Detect(ctx context.Context, homeDir string) (installed bool, binaryPath string, configPath string, configFound bool, err error)
 
 	// Installation
-	SupportsAutoInstall() bool
 	InstallCommand(profile system.PlatformProfile) ([][]string, error)
 
 	// Config paths — components use these instead of hardcoding paths per agent.
@@ -43,14 +38,25 @@ type Adapter interface {
 	// MCP path resolution
 	MCPConfigPath(homeDir string, serverName string) string
 
-	// Optional capabilities — agents declare what they support.
+	// Optional capabilities — compatibility projections of the adapter's
+	// canonical AgentCapabilityManifest.
 	SupportsOutputStyles() bool
 	OutputStyleDir(homeDir string) string
 
 	SupportsSlashCommands() bool
 	CommandsDir(homeDir string) string
 
+	SupportsSubAgents() bool
+	SubAgentsDir(homeDir string) string
+	EmbeddedSubAgentsDir() string
+
 	SupportsSkills() bool
 	SupportsSystemPrompt() bool
 	SupportsMCP() bool
+}
+
+// EffectiveCodeGraphWiringDetector is an optional adapter capability for agents
+// whose configuration format requires semantic validation beyond marker checks.
+type EffectiveCodeGraphWiringDetector interface {
+	EffectiveCodeGraphWiring(homeDir string) (path string, configured bool)
 }

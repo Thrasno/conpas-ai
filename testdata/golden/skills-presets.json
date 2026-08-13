@@ -1,6 +1,6 @@
 [
   {
-    "preset": "full",
+    "preset": "full-gentleman",
     "skills": [
       "sdd-init",
       "sdd-explore",
@@ -11,12 +11,21 @@
       "sdd-apply",
       "sdd-verify",
       "sdd-archive",
+      "sdd-onboard",
       "judgment-day",
       "go-testing",
+      "gentle-ai-bench",
       "skill-creator",
+      "skill-improver",
       "branch-pr",
       "issue-creation",
-      "zoho-deluge"
+      "skill-registry",
+      "chained-pr",
+      "cognitive-doc-design",
+      "comment-writer",
+      "work-unit-commits",
+      "rdd-defect-workflow",
+      "systemic-issue-triage"
     ]
   },
   {
@@ -31,12 +40,21 @@
       "sdd-apply",
       "sdd-verify",
       "sdd-archive",
+      "sdd-onboard",
       "judgment-day",
       "go-testing",
+      "gentle-ai-bench",
       "skill-creator",
+      "skill-improver",
       "branch-pr",
       "issue-creation",
-      "zoho-deluge"
+      "skill-registry",
+      "chained-pr",
+      "cognitive-doc-design",
+      "comment-writer",
+      "work-unit-commits",
+      "rdd-defect-workflow",
+      "systemic-issue-triage"
     ]
   },
   {
@@ -51,6 +69,7 @@
       "sdd-apply",
       "sdd-verify",
       "sdd-archive",
+      "sdd-onboard",
       "judgment-day"
     ]
   }

@@ -1,17 +1,34 @@
 ---
 name: sdd-spec
-description: >
-  Write specifications with requirements and scenarios (delta specs for changes).
-  Trigger: When the orchestrator launches you to write or update specs for a change.
+description: "Write SDD delta specs with requirements and scenarios. Trigger: orchestrator launches spec work for a change."
+disable-model-invocation: true
+user-invocable: false
 license: MIT
 metadata:
   author: gentleman-programming
   version: "2.0"
+  delegate_only: true
 ---
+
+## Execution Role
+
+Confirm your role before acting. You are the dedicated `sdd-spec` sub-agent unless you loaded this skill directly through the `skill()` tool.
+
+- If you are the `sdd-spec` sub-agent, continue with the phase work below. Do not delegate. Do not call the Skill tool.
+- If you loaded this skill through the `skill()` tool, you are the orchestrator. Stop here and delegate to the dedicated `sdd-spec` sub-agent using your platform's delegation primitive (for example, `task(...)` or a sub-agent invocation).
+
+
+## Language Domain Contract
+
+Generated technical artifacts default to English. Do not inherit the user's conversational language or the active persona's regional voice for SDD artifacts unless the user explicitly requests that artifact language or the project convention requires it.
+
+If technical artifacts are explicitly requested in another language, use a neutral/professional register unless the user explicitly requests a different tone or regional variant.
+
+Public/contextual comments follow the target context language by default. Explicit user language or tone overrides win; otherwise use a neutral/professional register unless the target context clearly calls for another tone or regional variant.
 
 ## Purpose
 
-You are a sub-agent responsible for writing SPECIFICATIONS. You take the proposal and produce delta specs — structured requirements and scenarios that describe what's being ADDED, MODIFIED, or REMOVED from the system's behavior.
+You are a sub-agent responsible for writing SPECIFICATIONS. You take the proposal and produce delta specs — structured requirements and scenarios that describe what's being ADDED, MODIFIED, REMOVED, or RENAMED from the system's behavior.
 
 ## What You Receive
 
@@ -35,7 +52,19 @@ Follow **Section A** from `skills/_shared/sdd-phase-common.md`.
 
 ### Step 2: Identify Affected Domains
 
-From the proposal's "Affected Areas", determine which spec domains are touched. Group changes by domain (e.g., `auth/`, `payments/`, `ui/`).
+Read the proposal's **Capabilities section** — this is your primary contract:
+
+```
+FOR EACH entry under "New Capabilities":
+├── This becomes a NEW full spec: openspec/specs/<capability-name>/spec.md
+└── Write a complete spec (not a delta) — no existing behavior to reference
+
+FOR EACH entry under "Modified Capabilities":
+├── This becomes a DELTA spec: openspec/changes/{change-name}/specs/<capability-name>/spec.md
+└── Read existing openspec/specs/<capability-name>/spec.md first — your delta modifies it
+```
+
+If the proposal has no Capabilities section (older format), fall back to inferring from "Affected Areas". But always prefer the explicit Capabilities mapping when present.
 
 ### Step 3: Read Existing Specs
 
@@ -58,6 +87,24 @@ openspec/changes/{change-name}/
 ```
 
 **IF mode is `engram` or `none`:** Do NOT create any `openspec/` directories or files. Compose the spec content in memory — you will persist it in Step 5.
+
+#### MODIFIED Requirements Workflow (CRITICAL — read before writing deltas)
+
+When writing a `## MODIFIED Requirements` section, follow this exact workflow:
+
+```
+1. Locate the requirement in openspec/specs/{domain}/spec.md
+2. COPY the ENTIRE requirement block — from `### Requirement:` through ALL its scenarios
+3. PASTE it under `## MODIFIED Requirements`
+4. EDIT the copy to reflect the new behavior
+5. Add "(Previously: {one-line summary of what changed})" under the requirement text
+
+Why copy-full-then-edit?
+→ The archive step REPLACES the requirement in main specs with your MODIFIED block
+→ If your block is partial, the archive will lose scenarios you didn't copy
+→ Common pitfall: only writing the changed scenario and losing the rest
+→ If adding NEW behavior WITHOUT changing existing behavior, use ADDED instead
+```
 
 #### Delta Spec Format
 
@@ -89,10 +136,16 @@ The system {MUST/SHALL/SHOULD} {do something specific}.
 
 ### Requirement: {Existing Requirement Name}
 
-{New description — replaces the existing one}
-(Previously: {what it was before})
+{Full updated requirement text — replaces the existing one entirely}
+(Previously: {what it was before, in one line})
 
-#### Scenario: {Updated scenario}
+#### Scenario: {Unchanged scenario — keep if still valid}
+
+- GIVEN {precondition}
+- WHEN {action}
+- THEN {outcome}
+
+#### Scenario: {Updated or new scenario}
 
 - GIVEN {updated precondition}
 - WHEN {updated action}
@@ -103,6 +156,14 @@ The system {MUST/SHALL/SHOULD} {do something specific}.
 ### Requirement: {Requirement Being Removed}
 
 (Reason: {why this requirement is being deprecated/removed})
+(Migration: {what replaces it, or "None" if no migration is needed})
+
+## RENAMED Requirements
+
+### Requirement: {Old Requirement Name} → {New Requirement Name}
+
+(Reason: {why the requirement is being renamed})
+(Migration: {how references/tests/docs should update, or "None" if no migration is needed})
 ```
 
 #### For NEW Specs (No Existing Spec)
@@ -165,12 +226,17 @@ Ready for design (sdd-design). If design already exists, ready for tasks (sdd-ta
 
 - ALWAYS use Given/When/Then format for scenarios
 - ALWAYS use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY) for requirement strength
+- Read the proposal's **Capabilities section** first — it tells you exactly which spec files to create
 - If existing specs exist, write DELTA specs (ADDED/MODIFIED/REMOVED sections)
 - If NO existing specs exist for the domain, write a FULL spec
 - Every requirement MUST have at least ONE scenario
 - Include both happy path AND edge case scenarios
 - Keep scenarios TESTABLE — someone should be able to write an automated test from each one
 - DO NOT include implementation details in specs — specs describe WHAT, not HOW
+- **MODIFIED requirements MUST be the FULL block** — copy entire requirement + all scenarios from main spec, then edit. Partial MODIFIED blocks lose content at archive time.
+- If adding new behavior without changing existing behavior → use ADDED, not MODIFIED
+- REMOVED requirements MUST include Reason and SHOULD include Migration when consumers, persisted behavior, docs, or tests are affected
+- RENAMED requirements MUST state both old and new names explicitly and SHOULD include Migration guidance for references/tests/docs
 - Apply any `rules.specs` from `openspec/config.yaml`
 - **Size budget**: Spec artifact MUST be under 650 words. Prefer requirement tables over narrative descriptions. Each scenario: 3-5 lines max.
 - Return envelope per **Section D** from `skills/_shared/sdd-phase-common.md`.

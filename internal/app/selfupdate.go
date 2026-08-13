@@ -1,39 +1,73 @@
 package app
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
-	"runtime"
-	"syscall"
+	"strings"
 	"time"
 
-	"github.com/Thrasno/conpas-ai/internal/system"
-	"github.com/Thrasno/conpas-ai/internal/update"
-	"github.com/Thrasno/conpas-ai/internal/update/upgrade"
+	"github.com/mattn/go-isatty"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade"
 )
 
-// lookPathFn is a package-level var for testability.
-var lookPathFn = exec.LookPath
+// selfUpdateNowFn returns the current time; injected for test determinism.
+var selfUpdateNowFn = func() time.Time { return time.Now() }
+
+// selfUpdateHomeDirFn resolves the user home directory; injected for tests.
+var selfUpdateHomeDirFn = os.UserHomeDir
 
 // Environment variable names for self-update control.
+// NOTE: GENTLE_AI_CONFIRM_UPDATE removed in slice 5 — prompt is now unconditional.
 const (
 	envNoSelfUpdate   = "GENTLE_AI_NO_SELF_UPDATE"
 	envSelfUpdateDone = "GENTLE_AI_SELF_UPDATE_DONE"
+	envYesUpdate      = "GENTLE_AI_YES"
 )
+
+// isattyFn is a package-level var for TTY detection, injectable for tests.
+var isattyFn = func(fd uintptr) bool { return isatty.IsTerminal(fd) }
+
+// selfUpdateYesFn returns true when the caller wants the upgrade to proceed
+// without an interactive prompt. Set GENTLE_AI_YES=1 for scripted upgrades.
+// Injectable for tests.
+var selfUpdateYesFn = func() bool {
+	return os.Getenv(envYesUpdate) == "1"
+}
+
+// promptFn is swappable for tests — asks the user whether to apply the update.
+// Returns true if the user confirms, false to skip.
+var promptFn = defaultPromptForUpdate
+
+// defaultPromptForUpdate prints the version delta and reads a Y/n answer from stdin.
+// Default answer is Y (Enter = accept). If stdin is not a TTY, it auto-declines so
+// scripts and CI are never blocked. Uses isattyFn for testability.
+func defaultPromptForUpdate(stdout io.Writer, stdin io.Reader, currentVersion, latestVersion string) (bool, error) {
+	// Require a TTY; non-interactive environments silently decline.
+	if f, ok := stdin.(*os.File); !ok || !isattyFn(f.Fd()) {
+		return false, nil
+	}
+
+	_, _ = fmt.Fprintf(stdout, "Update available: %s → %s. Apply now? [Y/n]: ", currentVersion, latestVersion)
+
+	scanner := bufio.NewScanner(stdin)
+	if !scanner.Scan() {
+		return false, scanner.Err()
+	}
+	answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
+	// Empty input (Enter) = accept default Y; "y"/"yes" explicit accept; anything else declines.
+	return answer == "" || answer == "y" || answer == "yes", nil
+}
 
 // selfUpdateTimeout is the maximum time allowed for the update check + upgrade.
 const selfUpdateTimeout = 7 * time.Second
-
-// reExec is swappable for testing — prevents actual syscall.Exec in tests.
-var reExec = func(argv0 string, argv []string, envv []string) error {
-	return syscall.Exec(argv0, argv, envv)
-}
-
-// goOS returns the current operating system name. Package-level var for testing.
-var goOS = func() string { return runtime.GOOS }
 
 // selfUpdate checks for and applies a gentle-ai update before normal dispatch.
 // Returns nil on success or skip; errors are non-fatal (caller logs and continues).
@@ -63,13 +97,27 @@ func selfUpdate(ctx context.Context, version string, profile system.PlatformProf
 	ctx, cancel := context.WithTimeout(ctx, selfUpdateTimeout)
 	defer cancel()
 
-	// Check for updates (only gentle-ai).
-	results := updateCheckFiltered(ctx, version, profile, []string{"conpas-ai"})
+	// Resolve home directory for cooldown state read/write.
+	homeDir, err := selfUpdateHomeDirFn()
+	if err != nil {
+		homeDir = "" // fall back to always-check on home dir failure
+	}
+
+	// Check for updates (only gentle-ai), gated by the 6h cooldown.
+	// When the cache is fresh (elapsed < UpdateCheckTTL), this returns nil
+	// and no network request is made. The underlying check is always
+	// updateCheckFiltered, kept as a package-level var for other tests.
+	results := update.CheckAllWithCooldown(ctx, version, profile, homeDir, update.UpdateCheckTTL,
+		selfUpdateNowFn,
+		func(c context.Context, ver string, prof system.PlatformProfile) []update.UpdateResult {
+			return updateCheckFiltered(c, ver, prof, []string{"gentle-ai"})
+		},
+	)
 
 	// Find the gentle-ai result.
 	var target *update.UpdateResult
 	for i := range results {
-		if results[i].Tool.Name == "conpas-ai" {
+		if results[i].Tool.Name == "gentle-ai" {
 			target = &results[i]
 			break
 		}
@@ -80,10 +128,25 @@ func selfUpdate(ctx context.Context, version string, profile system.PlatformProf
 		return nil
 	}
 
+	// Prompt the user before applying — unconditional (GENTLE_AI_CONFIRM_UPDATE removed).
+	// When --yes / GENTLE_AI_YES=1, substitute an auto-accept stub so scripted
+	// upgrades work without a TTY. When stdin is not a TTY, defaultPromptForUpdate
+	// auto-declines, making non-interactive runs (CI, pipes) safe by default.
+	activePrmptFn := promptFn
+	if selfUpdateYesFn() {
+		activePrmptFn = func(_ io.Writer, _ io.Reader, _, _ string) (bool, error) {
+			return true, nil
+		}
+	}
+	ok, err := activePrmptFn(stdout, os.Stdin, version, target.LatestVersion)
+	if err != nil || !ok {
+		return nil
+	}
+
 	// Run upgrade (backup + strategy execution).
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		_, _ = fmt.Fprintf(stdout, "self-update: cannot resolve home directory: %v\n", err)
+	// homeDir was resolved above for the cooldown gate; re-check in case it failed.
+	if homeDir == "" {
+		_, _ = fmt.Fprintf(stdout, "self-update: cannot resolve home directory\n")
 		return nil // non-fatal
 	}
 
@@ -92,7 +155,7 @@ func selfUpdate(ctx context.Context, version string, profile system.PlatformProf
 	// Check if upgrade succeeded.
 	var succeeded bool
 	for _, r := range report.Results {
-		if r.ToolName == "conpas-ai" && r.Status == upgrade.UpgradeSucceeded {
+		if r.ToolName == "gentle-ai" && r.Status == upgrade.UpgradeSucceeded {
 			succeeded = true
 			break
 		}
@@ -103,33 +166,59 @@ func selfUpdate(ctx context.Context, version string, profile system.PlatformProf
 		return nil
 	}
 
-	// Re-exec on Unix; print message on Windows.
-	if goOS() == "windows" {
-		_, _ = fmt.Fprintf(stdout, "Updated to v%s — please restart.\n", target.LatestVersion)
-		return nil
-	}
-
-	// Unix: re-exec with the updated binary.
+	// Deferred sync: set PendingSync=true in state before exiting so the new
+	// binary runs sync automatically on its next launch. This replaces the
+	// previous "restart and sync manually" skip path. Failure to write state is
+	// non-fatal — the user can re-run sync explicitly.
 	//
-	// Use exec.LookPath("conpas-ai") rather than os.Executable() because
-	// on Homebrew, os.Executable() resolves to the versioned Cellar path
-	// (e.g. /opt/homebrew/Cellar/gentle-ai/1.8.5/bin/gentle-ai) which
-	// still points to the OLD binary after upgrade. The PATH symlink
-	// (/opt/homebrew/bin/gentle-ai) is updated by Homebrew to the new
-	// version, so LookPath gives us the correct binary.
-	executable, err := lookPathFn("conpas-ai")
-	if err != nil {
-		// Fallback to os.Executable() if LookPath fails.
-		executable, err = os.Executable()
-		if err != nil {
-			return nil // non-fatal
+	// No-clobber guard: only fall back to a fresh InstallState{} when the file
+	// is genuinely missing (ErrNotExist). Any other read error (e.g. corrupt
+	// JSON, permission denied) means an existing file is present — do not
+	// overwrite it and risk dropping unrelated persisted fields.
+	if homeDir != "" {
+		s, readErr := state.Read(homeDir)
+		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+			// File exists but is unreadable/corrupt — skip this round to avoid
+			// clobbering installed_agents, model assignments, etc.
+		} else {
+			s.PendingSync = true
+			_ = state.Write(homeDir, s)
 		}
 	}
 
-	// Set loop guard env var before re-exec.
-	os.Setenv(envSelfUpdateDone, "1")
+	return restartAfterGentleAIUpgrade(target.LatestVersion, stdout)
+}
 
-	_, _ = fmt.Fprintf(stdout, "Updated to v%s, restarting...\n", target.LatestVersion)
+func gentleAIUpgradeSucceeded(report upgrade.UpgradeReport) (string, bool) {
+	for _, r := range report.Results {
+		if r.ToolName == "gentle-ai" && r.Status == upgrade.UpgradeSucceeded {
+			return strings.TrimPrefix(r.NewVersion, "v"), true
+		}
+	}
+	return "", false
+}
 
-	return reExec(executable, os.Args, os.Environ())
+func restartAfterGentleAIUpgrade(latestVersion string, stdout io.Writer) error {
+	latestVersion = strings.TrimPrefix(latestVersion, "v")
+	// Converged behavior (task 4.6): always print the restart message on every OS
+	// and return. The new binary runs automatically on next launch, picking up
+	// PendingSync=true and completing the deferred sync. This sidesteps the
+	// Windows binary-lock issue and gives a consistent single path across all OSes.
+	// Tradeoff: Unix loses seamless re-exec restart; mitigated by clear copy below.
+	_, _ = fmt.Fprintf(stdout, "Updated to v%s — restart gentle-ai to continue.\n", latestVersion)
+	return nil
+}
+
+// printPostUpgradeDoctorAdvisory prints a non-blocking informational advisory
+// suggesting the user run 'gentle-ai doctor' to verify ecosystem health after
+// a successful gentle-ai upgrade. It is purely informational: it does not run
+// any checks, does not change exit status, and does not block the upgrade.
+//
+// The advisory is shown in two places:
+//  1. After a successful `gentle-ai upgrade` CLI invocation (printed by runUpgrade).
+//  2. On the next launch under the new binary when PendingSync=true is observed
+//     (covers the TUI self-update path, where the new binary was not yet running
+//     when the upgrade completed).
+func printPostUpgradeDoctorAdvisory(stdout io.Writer) {
+	_, _ = fmt.Fprintf(stdout, "\n[info]    Run 'gentle-ai doctor' to verify ecosystem health after upgrade\n")
 }
