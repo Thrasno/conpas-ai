@@ -78,6 +78,9 @@ func TestCompactEffectMarkerIsPrivateSeparateAndStable(t *testing.T) {
 		t.Fatalf("marker root is not private: %v", err)
 	}
 	path, _ := repository.path(marker.LineageID, marker.AuthorityRevision, marker.EventID, false)
+	if err := validatePrivateRARFile(path); err != nil {
+		t.Fatalf("marker file is not private: %v", err)
+	}
 	before, _ := os.ReadFile(path)
 	info, _ := os.Stat(path)
 	time.Sleep(20 * time.Millisecond)
@@ -264,6 +267,20 @@ func TestCompactEffectMarkerRejectsUnsafeStorageAndIdentity(t *testing.T) {
 	}
 	if _, err := repository.read(marker.LineageID, marker.AuthorityRevision, marker.EventID); err == nil {
 		t.Fatal("accepted non-regular marker")
+	}
+}
+
+func TestWritePrivateRARAtomicRejectsSymlinkParent(t *testing.T) {
+	realParent := t.TempDir()
+	linkedParent := filepath.Join(t.TempDir(), "linked")
+	if err := os.Symlink(realParent, linkedParent); err != nil {
+		if errors.Is(err, os.ErrPermission) || errors.Is(err, errors.ErrUnsupported) {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+	if err := writePrivateRARAtomic(filepath.Join(linkedParent, "marker.json"), []byte("marker\n")); err == nil {
+		t.Fatal("accepted symlink private parent")
 	}
 }
 

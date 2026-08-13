@@ -75,7 +75,7 @@ func (repository compactEffectMarkerRepository) write(ctx context.Context, marke
 	payload, _ := json.Marshal(marker)
 	publication := compactEffectPublication{}
 	var publicationErr error
-	if err := writeAtomic(path, append(payload, '\n'), 0o600); err != nil {
+	if err := writePrivateRARAtomic(path, append(payload, '\n')); err != nil {
 		var syncErr *directorySyncError
 		if !errors.As(err, &syncErr) {
 			return publication, err
